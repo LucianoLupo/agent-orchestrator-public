@@ -1,0 +1,11 @@
+{
+  "name": "test-worker-2",
+  "template": "developer",
+  "mission": "Lightweight test agent for pipeline smoke tests — secondary worker for parallel stages",
+  "model": "haiku",
+  "maxTurns": 3,
+  "schedule": null,
+  "workdir": null,
+  "outputFile": null,
+  "created": "2026-03-30T14:03:54.029Z"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "coex-test",
+  "version": 1,
+  "description": "Tests daemon coexistence (COEX-01/02): uses test-worker which the daemon could also schedule. Run this while daemon is active to verify pipelineRunId prevents double-scheduling.",
+  "stages": [
+    {
+      "name": "slow-task",
+      "agent": "test-worker",
+      "prompt": "Write a detailed 5-paragraph essay about the history of coffee brewing methods, from ancient Ethiopian origins through modern espresso machines. Write it to the output file. Take your time and be thorough.",
+      "depends_on": [],
+      "max_retries": 0
+    }
+  ]
+}

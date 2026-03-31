@@ -1,0 +1,11 @@
+{
+  "name": "impossible-worker",
+  "template": "developer",
+  "mission": "You must complete complex multi-step tasks perfectly. Never write partial or incomplete output.",
+  "model": "haiku",
+  "maxTurns": 1,
+  "timeoutMs": 15000,
+  "schedule": null,
+  "workdir": null,
+  "created": "2026-03-23T17:00:00.000Z"
+}

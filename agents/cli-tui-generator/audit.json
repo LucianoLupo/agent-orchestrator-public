@@ -1,0 +1,50 @@
+{
+  "scores": {
+    "mission_clarity": 9,
+    "instruction_quality": 8,
+    "verification_design": 9,
+    "turn_budget_fit": 7,
+    "memory_protocol": 8,
+    "domain_encoding": 10
+  },
+  "overall": 8.5,
+  "critical_issues": [
+    "Phase 3 turn budget says '18-22 turns' for execute but the total max_turns is 30 — leaving only 8-12 turns for Orient+Plan+Verify+Report, which contradicts the per-phase budgets listed (Orient:2, Plan:2, Execute:18-22, Verify:4, Report:1 = 27-31 total). The protocol can legitimately exceed max_turns for complex TUIs.",
+    "TUI verification says 'run it briefly' but gives no concrete command or timeout — an interactive TUI launched in a non-TTY CI-like environment will hang the agent turn indefinitely. There is no fallback for headless verification of interactive apps.",
+    "The harness encodes absolute paths ($HOME/...) which will break if the agent is run on any other machine or moved to a different user home, making memory reads/writes silently fail."
+  ],
+  "improvements": [
+    {
+      "section": "Identity — Turn budget",
+      "current": "Turn budget: Orient (1-2), Plan (2), Execute (varies), Verify (3-4), Report (1). Simple single-file CLIs should finish executing in 8-10 turns. Complex multi-file TUIs may use 18-22.",
+      "suggested": "Turn budget: Orient (1-2), Plan (1-2), Execute (8-18), Verify (2-4), Report (1). Simple single-file CLIs: ~14 turns total. Complex multi-file TUIs: ~27 turns total. If you are building a multi-file TUI and are past turn 20 without a working entry point, immediately cut scope.",
+      "reason": "The current budgets sum to 27-31 which can exceed the 30 max_turns cap on complex tasks. Rebalancing with explicit total estimates prevents the agent from running out of turns mid-verify."
+    },
+    {
+      "section": "Development Protocol — Phase 4 Verify, TUI verification",
+      "current": "For TUIs specifically: check that the app doesn't immediately crash by running it briefly, or at minimum verify all require/import paths resolve and the screen initializes",
+      "suggested": "For TUIs specifically: since interactive TUIs cannot run headlessly, verify with a non-interactive check instead: (Node.js) `node -e \"require('./src/index.js')\"` to confirm imports resolve without crashing; (Python) `python -c \"import app\"` or run with `--help` if the framework supports it; (Rust/Go) `cargo check` / `go build` is sufficient. Never launch the full interactive TUI — it will hang the agent turn.",
+      "reason": "Launching an interactive TUI in the agent's non-TTY shell environment will cause the turn to hang or timeout. A concrete, non-hanging alternative per ecosystem prevents this failure mode."
+    },
+    {
+      "section": "Directories",
+      "current": "Agent home: $HOME/projects/agent-orchestrator/agents/cli-tui-generator\nMemory: $HOME/projects/agent-orchestrator/agents/cli-tui-generator/.claude/memory/",
+      "suggested": "Agent home: determined from the location of this CLAUDE.md file (the directory containing it). Memory: <agent-home>/.claude/memory/. Output: <agent-home>/runs/{ISO-timestamp}/. Use relative anchoring from CLAUDE.md location rather than hardcoded absolute paths.",
+      "reason": "Hardcoded absolute paths break when the agent is run on a different machine, by a different user, or after the repo is moved. Anchoring to the CLAUDE.md location makes paths portable."
+    },
+    {
+      "section": "Memory — update block format",
+      "current": "- **Gotchas:** [framework issues encountered]",
+      "suggested": "- **Gotchas:** [specific framework issues encountered — must reference exact symptom and fix, e.g. 'blessed-contrib x:[\\'\\'] renders as null — use \\' \\']. Skip this field if none encountered.",
+      "reason": "The current template allows agents to write vague gotcha entries ('had some chart issues') that don't propagate useful knowledge to future runs. Requiring symptom+fix format forces actionable memory entries consistent with the detailed gotchas already in Domain Expertise."
+    },
+    {
+      "section": "Scope Management",
+      "current": "If you're past turn 25 and the tool isn't complete",
+      "suggested": "If you're past turn 22 and the tool isn't complete (or past turn 18 for a simple single-file CLI)",
+      "reason": "Triggering scope reduction at turn 25 of 30 leaves only 5 turns to finish, verify, and report — not enough. Earlier triggering at turn 22 (or 18 for simple tools) gives the agent enough runway to land cleanly."
+    }
+  ],
+  "verdict": "This agent is ready to run for most tasks — the domain encoding and verification design are excellent — but needs the turn budget arithmetic fixed and TUI headless-verification clarified before it can reliably handle complex multi-file TUI builds without hitting the max_turns wall.",
+  "auditedAt": "2026-03-20T04:16:58.410Z"
+}

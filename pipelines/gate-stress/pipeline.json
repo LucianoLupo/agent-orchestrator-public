@@ -1,0 +1,28 @@
+{
+  "name": "gate-stress",
+  "version": 1,
+  "description": "3-stage pipeline to stress-test supervisor gates: stage 1 produces minimal output (gate may retry), stage 2 builds on it, stage 3 is independent (tests topo sort with parallel-ready deps)",
+  "stages": [
+    {
+      "name": "draft",
+      "agent": "test-worker",
+      "prompt": "Write exactly ONE sentence describing what a pipeline orchestrator does. Just one sentence, nothing more. Write it to the output file.",
+      "depends_on": [],
+      "max_retries": 2
+    },
+    {
+      "name": "expand",
+      "agent": "test-worker",
+      "prompt": "Read the previous stage's output (one sentence about pipeline orchestrators). Expand it into a 3-bullet feature list. Write the bullets to the output file. Reference the original sentence to prove you read $prev.",
+      "depends_on": ["draft"],
+      "max_retries": 2
+    },
+    {
+      "name": "summarize",
+      "agent": "test-worker",
+      "prompt": "Write a one-line summary suitable for a README badge: 'Pipeline orchestrator: <10 words>'. Write it to the output file.",
+      "depends_on": ["expand"],
+      "max_retries": 1
+    }
+  ]
+}

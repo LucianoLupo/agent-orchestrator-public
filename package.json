@@ -1,0 +1,15 @@
+{
+  "name": "agent-orchestrator",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "orchestrator": "./orchestrator.mjs"
+  },
+  "scripts": {
+    "daemon": "node orchestrator.mjs daemon",
+    "list": "node orchestrator.mjs list"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

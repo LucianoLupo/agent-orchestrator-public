@@ -1,0 +1,28 @@
+{
+  "name": "claude-monitor-v2",
+  "version": 1,
+  "description": "Full rewrite of claude-monitor TUI: research modern frameworks + Claude Code internals, build v2, supervisor reviews against v1 baseline",
+  "stages": [
+    {
+      "name": "research",
+      "agent": "claude-monitor-research",
+      "prompt": "Research everything needed to build a v2 of the claude-monitor TUI. Focus on:\n\n1. **Modern TUI framework**: Compare Ink (React for CLIs, Node.js) vs Textual (Python) vs Ratatui (Rust) vs Bubbletea (Go) for a real-time process monitor. We want: live updating, charts/sparklines, tables, responsive layout, mouse support, good DX. The v1 used blessed (unmaintained 11 years) — find something actively maintained.\n\n2. **Claude Code CLI current state (2026)**: What flags does `claude --help` show? Is there `--output-format stream-json`? What about `--session-id`, `--resume`, `--name`? Check if there's an official way to list active sessions or get session metadata.\n\n3. **Claude Code session storage**: How does `~/.claude/` structure sessions now? What's in `projects/` subdirs? What does the JSONL session format look like — message types, content blocks, tool_use events? Has this changed recently?\n\n4. **Process monitoring on macOS**: Best Node.js libs for process listing + CPU/memory stats in 2026. Is ps-list still the best? Any native alternatives? How to get per-process network I/O?\n\n5. **Inspiration**: Look at btop, lazydocker, k9s for TUI design patterns — what makes them great? Key UX patterns: filterable lists, detail panes, sparklines, tab navigation.\n\nWrite your report to the output file. Include concrete recommendations for the build stage.",
+      "depends_on": [],
+      "max_retries": 2
+    },
+    {
+      "name": "build",
+      "agent": "cli-tui-generator",
+      "prompt": "Build claude-monitor v2 — a complete rewrite of the Claude Code process monitor TUI.\n\n**Read the research report from the previous stage first** — it contains framework recommendations and Claude Code internals findings. Use those findings to make your technology choice.\n\n**What to build:**\nA real-time terminal dashboard that monitors all running Claude Code CLI instances. Think btop meets lazydocker but for Claude Code.\n\n**Required features:**\n1. **Process list** with live CPU%, memory, model, mode (interactive/agent/print), uptime, session name\n2. **CPU + Memory sparklines/charts** per process (rolling 2-minute window)\n3. **Live session viewer** — tail the active session JSONL and show tool calls, user messages, assistant responses in a scrollable log. Color-code by tool type.\n4. **Orchestrator integration** — show agent-orchestrator agents and pipeline status\n5. **Tab/panel navigation** — keyboard driven: Tab to cycle panels, number keys to select processes, / to filter\n6. **Responsive layout** that handles terminal resize\n7. **Process detail view** — press Enter on a process to see full CLI args, session path, accumulated tokens if available\n\n**Design goals:**\n- Modern framework (NOT blessed — it's dead). Prefer Ink if Node.js, or whatever the research recommends.\n- Clean, btop-inspired aesthetic with box-drawing characters and color-coded sections\n- Fast polling (500ms for processes, tail-based for session events)\n- Graceful degradation when no Claude processes are running\n- ESM modules, clean project structure\n\n**Output location:** Write the complete project to your run output directory as `claude-monitor-v2/`.\n\n**V1 reference (what to improve on):**\n- V1 used blessed + blessed-contrib (buggy charts, unmaintained)\n- V1 had fragile session-to-PID matching\n- V1 had no process detail view, no filtering, no tabs\n- V1 was CJS with hardcoded paths\n- V1 chart x-axis rendered 'null' for empty string labels (blessed-contrib bug)\n\nMake this genuinely better than v1 — not just a reskin.",
+      "depends_on": ["research"],
+      "max_retries": 2
+    },
+    {
+      "name": "review",
+      "agent": "code-reviewer",
+      "prompt": "You are reviewing the claude-monitor v2 build. Find the built project in the pipeline run directory (look for the build stage output or a claude-monitor-v2 directory).\n\n**Review checklist:**\n1. Does the project have a working package.json/config with all dependencies listed?\n2. Does `--help` output exist and document all features?\n3. Are there any hardcoded absolute paths (should use os.homedir() or env vars)?\n4. Are imports/requires all valid (no missing modules)?\n5. Does it handle the 'no Claude processes running' state gracefully?\n6. Is the session JSONL parsing robust (try/catch around JSON.parse, handle partial lines)?\n7. Is there keyboard navigation (Tab, number keys, q to quit)?\n8. Does it read orchestrator state from the correct location?\n9. Code quality: ESM? Clean structure? No dead code?\n10. Compare against v1 features — is anything missing that v1 had?\n\n**Write a detailed review to your output file** with: score (1-10), what's good, what's missing, specific issues with file:line references where possible.",
+      "depends_on": ["build"],
+      "max_retries": 1
+    }
+  ]
+}

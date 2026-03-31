@@ -1,0 +1,21 @@
+{
+  "name": "bad-output",
+  "version": 1,
+  "description": "Tests gate retry/abort: stage demands strict JSON output but agent may produce prose. Gate should reject non-JSON output.",
+  "stages": [
+    {
+      "name": "generate-json",
+      "agent": "test-worker",
+      "prompt": "IMPORTANT: Your output file must contain ONLY valid JSON — no markdown, no explanation, no code fences. Write this exact structure to the output file: a JSON object with keys 'product' (string), 'price' (number), 'features' (array of 3 strings), 'available' (boolean). Invent plausible values for an AI coffee machine. The output file must parse as valid JSON. No other text allowed.",
+      "depends_on": [],
+      "max_retries": 2
+    },
+    {
+      "name": "validate-json",
+      "agent": "test-worker",
+      "prompt": "Read the previous stage's output. Verify it is valid JSON by parsing it. Write to your output file: if valid JSON, write { \"valid\": true, \"keys\": [list the top-level keys] }. If not valid JSON, write { \"valid\": false, \"error\": \"description of what's wrong\" }. Your output must also be pure JSON, no markdown.",
+      "depends_on": ["generate-json"],
+      "max_retries": 1
+    }
+  ]
+}

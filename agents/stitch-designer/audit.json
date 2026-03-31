@@ -1,0 +1,51 @@
+{
+  "scores": {
+    "mission_clarity": 8,
+    "instruction_quality": 7,
+    "verification_design": 4,
+    "turn_budget_fit": 6,
+    "memory_protocol": 6,
+    "domain_encoding": 8
+  },
+  "overall": 6.5,
+  "critical_issues": [
+    "No retry or fallback strategy for failed screen generation — 'NEVER retry if it seems slow' is good, but there's no guidance on what to do if generation actually fails (timeout, error response, empty result)",
+    "Turn budget math doesn't add up: Understand(1-2) + Project(2-3) + Screens(8-12) + Refine(5-8) + Report(1-2) = 17-27 turns, which exceeds the 25-turn max at the high end, leaving no buffer for errors",
+    "Verification design is weak: 'list_screens after each generation' only checks that a screen exists, not that it's correct — no quality gate, no way to catch a generated screen that looks wrong",
+    "The 'Design System First' CRITICAL block says to 'review it and refine it with edit_screens if needed' but edit_screens requires selectedScreenIds — a design theme/system is not a screen, so this instruction may be technically incorrect or misleading"
+  ],
+  "improvements": [
+    {
+      "section": "Stitch MCP Tools — generate_screen_from_text",
+      "current": "This takes a few minutes — NEVER retry if it seems slow",
+      "suggested": "This takes a few minutes — NEVER retry if it seems slow. If the tool returns an error (not just slowness), record the error, try once more with a simplified prompt, then skip that screen and note it in the report. Don't spend more than 2 turns recovering from a single failed generation.",
+      "reason": "The current instruction handles slowness but not actual failures, leaving the agent with no recovery path when a tool call errors out"
+    },
+    {
+      "section": "Design Protocol — Turn Budget",
+      "current": "Generate screens: 8-12 turns (each generation takes ~1 turn but may need retries) / Refine + variants: 5-8 turns",
+      "suggested": "Generate screens: 6-8 turns (primary screens only — 1 turn per screen, max 1 retry each) / Refine + variants: 3-5 turns (pick ONE direction, 1-2 edits, 1 variant batch). Keep 3 turns in reserve for unexpected errors.",
+      "reason": "Current high-end estimate is 27 turns against a 25-turn budget with no buffer; tightening phase allocations prevents the agent from running out of turns before reporting"
+    },
+    {
+      "section": "Stitch MCP Tools — list_screens verification",
+      "current": "Always verify generation succeeded by listing screens after creating",
+      "suggested": "After generating, call list_screens. Check: (1) screen count increased, (2) screen has a non-null imageUrl or equivalent. If the screen is missing or has no image, treat it as failed. Do NOT proceed to the next screen until you've confirmed the current one is present.",
+      "reason": "Existence check alone doesn't verify quality — adding a concrete field check (imageUrl present) makes verification deterministic rather than just a count"
+    },
+    {
+      "section": "Design Protocol — CRITICAL: Design System First",
+      "current": "Review it and refine it with `edit_screens` if needed before generating screens.",
+      "suggested": "Review the `designTheme.designMd` field in the create_project response. If it doesn't reflect the brief's color/typography requirements, generate a first screen with explicit style instructions that override the defaults — Stitch will update the design system as it learns from your screens. You cannot directly edit the design theme with edit_screens.",
+      "reason": "edit_screens operates on screen IDs, not on the design theme object — the current instruction implies you can edit a design system that may not yet have an associated screen, which is incorrect"
+    },
+    {
+      "section": "Memory",
+      "current": "Update it at the end with: Project IDs and screen IDs created / Design patterns that worked well / Client preferences discovered / What you'd improve next",
+      "suggested": "Update MEMORY.md at the end. For each run, append a dated entry with: (1) project ID and all screen IDs with their names, (2) the design system palette (hex values, fonts) that worked, (3) which modelId was used and whether quality was acceptable, (4) any Stitch tool quirks encountered. Use frontmatter format: `## Run: {date} | Project: {id}`.",
+      "reason": "Current memory instructions are correct in intent but too vague — without a structured format, memory entries will be inconsistent and hard to use across runs for project continuity"
+    }
+  ],
+  "verdict": "The harness has solid domain encoding and a clear mission, but needs a failure recovery path for tool errors, a corrected design-system editing instruction, and tighter turn budget allocation before it can reliably complete runs without going over budget or getting stuck.",
+  "auditedAt": "2026-03-24T13:22:53.898Z"
+}

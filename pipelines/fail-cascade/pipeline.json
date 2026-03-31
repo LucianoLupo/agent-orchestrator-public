@@ -1,0 +1,28 @@
+{
+  "name": "fail-cascade",
+  "version": 1,
+  "description": "Tests failure cascade: stage 1 succeeds, stage 2 uses impossible-worker (1 turn, 15s timeout) with a complex task that should fail or produce low-quality output, stage 3 should be skipped.",
+  "stages": [
+    {
+      "name": "setup",
+      "agent": "test-worker",
+      "prompt": "Write a brief project setup confirmation to the output file. Include: project name 'BrewMind API', status 'initialized', timestamp, and a note that the next stage should generate the OpenAPI spec. Format as JSON.",
+      "depends_on": [],
+      "max_retries": 0
+    },
+    {
+      "name": "impossible-task",
+      "agent": "impossible-worker",
+      "prompt": "Read the previous stage output. Now: create a complete REST API specification in OpenAPI 3.0 YAML format with at least 10 endpoints, request/response schemas, authentication, and error codes. Write the full spec to the output file. This MUST be complete and valid YAML.",
+      "depends_on": ["setup"],
+      "max_retries": 0
+    },
+    {
+      "name": "final-step",
+      "agent": "test-worker",
+      "prompt": "Read the previous stage output and confirm it is valid OpenAPI YAML. Write 'confirmed' to the output file.",
+      "depends_on": ["impossible-task"],
+      "max_retries": 0
+    }
+  ]
+}

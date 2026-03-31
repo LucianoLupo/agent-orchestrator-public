@@ -1,0 +1,52 @@
+{
+  "scores": {
+    "mission_clarity": 8,
+    "instruction_quality": 7,
+    "verification_design": 8,
+    "turn_budget_fit": 7,
+    "memory_protocol": 1,
+    "domain_encoding": 4
+  },
+  "overall": 5.8,
+  "critical_issues": [
+    "No memory protocol at all — agent has no instruction to read or write memory, so repeated failures across runs cannot be learned from or diagnosed.",
+    "Rule 1 output path parsing is under-specified: 'look for patterns like write output to <path> or output: <path>' will miss many real prompt formats (e.g., 'save to /tmp/out.txt', 'file: /path', JSON-structured prompts). No fallback heuristic or failure threshold defined.",
+    "Improve History sections are appended noise — they consume harness space and will confuse the model by making the document look like a changelog rather than operating instructions. These should not be in CLAUDE.md.",
+    "Rule 3 verification is logically flawed: it says 'first 100 characters match the beginning of your written content' but the agent is comparing its own memory of what it wrote against the file — not an independent ground truth. A model that misremembers what it wrote will pass this check incorrectly."
+  ],
+  "improvements": [
+    {
+      "section": "Rules — Rule 1",
+      "current": "look for patterns like 'write output to <path>' or 'output: <path>'",
+      "suggested": "Parse the output file path using these patterns in priority order: (1) explicit label: 'output file:', 'write to:', 'output:', 'save to:' followed by a path, (2) any absolute path ending in a known extension (.txt, .md, .json), (3) any relative path token containing a directory separator. If no path is found after all three passes, write error.txt to the agent workdir.",
+      "reason": "The current pattern list is too narrow and will silently fail on many real prompt formats, causing the agent to produce error.txt instead of output."
+    },
+    {
+      "section": "Rules — Rule 3",
+      "current": "the first 100 characters match the beginning of your written content",
+      "suggested": "Read the file and verify it is non-empty and that its byte length is >= the byte length of the content string you passed to Write. Do not compare character-by-character against memory — compare length and non-emptiness only. If the file is missing or empty, treat as verification failure.",
+      "reason": "Comparing against 'your written content' from memory is unreliable — the model may misremember. Length + non-empty is a deterministic check the agent can actually perform correctly."
+    },
+    {
+      "section": "Memory Protocol (new section)",
+      "current": "(missing)",
+      "suggested": "## Memory Protocol\nThis agent does not maintain cross-run memory. If the pipeline harness passes a memory file path via the stage prompt (e.g., 'memory: <path>'), read it before processing and append a one-line entry on completion: '<timestamp>: wrote <output_path> | task: <one-sentence summary>'.",
+      "reason": "Without any memory protocol, failures cannot be diagnosed across runs and the orchestrator has no audit trail from the agent's perspective."
+    },
+    {
+      "section": "Improve History sections",
+      "current": "---\n## Improve History\n### 2026-03-30T13:12:37.243Z — improve applied\n...",
+      "suggested": "(remove both Improve History sections entirely)",
+      "reason": "Changelog entries in CLAUDE.md consume context tokens, break the document's instructional register, and may confuse the model about which rules are current vs. historical."
+    },
+    {
+      "section": "Domain Encoding (new section)",
+      "current": "(missing — agent has no knowledge of pipeline context, stage prompt schema, or what constitutes valid output)",
+      "suggested": "## Pipeline Context\nStage prompts come from an agent-orchestrator pipeline. A stage prompt contains: (1) a task description (what to produce), (2) an output file path, and optionally (3) context from prior stages. Output files are consumed by downstream agents — write clean, structured content. If the task says 'summarize', write 2-4 sentences. If it says 'list', use a bullet list. If it says 'analyze', write a short paragraph with a conclusion. Match format to task verb.",
+      "reason": "The agent currently has zero knowledge of the pipeline environment it operates in. A haiku model with no domain context will produce generic output; encoding the stage prompt schema and output format heuristics lifts consistency."
+    }
+  ],
+  "verdict": "Harness is structurally sound for happy-path execution but needs the path-parsing rule hardened, verification logic fixed, Improve History noise removed, and a domain context section added before it will perform consistently above 7/10.",
+  "auditedAt": "2026-03-30T13:22:18.258Z",
+  "costUsd": 0.12984974999999999
+}

@@ -1,0 +1,11 @@
+{
+  "name": "code-reviewer",
+  "template": "developer",
+  "mission": "You are a thorough code reviewer. Read the entire project, check for bugs, missing features, broken imports, hardcoded paths, and code quality issues. Write detailed review reports with scores and specific file:line references.",
+  "model": "sonnet",
+  "maxTurns": 50,
+  "schedule": null,
+  "workdir": null,
+  "outputFile": null,
+  "created": "2026-03-24T18:27:18.138Z"
+}

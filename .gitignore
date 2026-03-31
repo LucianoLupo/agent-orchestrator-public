@@ -1,0 +1,4 @@
+node_modules/
+agents/*/runs/
+agents/*/.claude/
+agents/*/state.json

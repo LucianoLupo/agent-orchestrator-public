@@ -1,0 +1,28 @@
+{
+  "name": "diamond-deps",
+  "version": 1,
+  "description": "Tests non-linear topo sort: A and B have no deps, C depends on both A and B. No $prev (multi-dep stage can't use it).",
+  "stages": [
+    {
+      "name": "research-market",
+      "agent": "test-worker",
+      "prompt": "Write 2 bullet points about the current state of the AI coffee machine market. Write to the output file. Be concise.",
+      "depends_on": [],
+      "max_retries": 2
+    },
+    {
+      "name": "research-tech",
+      "agent": "test-worker-2",
+      "prompt": "Write 2 bullet points about the key technologies needed for an AI coffee machine (sensors, ML models). Write to the output file. Be concise.",
+      "depends_on": [],
+      "max_retries": 2
+    },
+    {
+      "name": "synthesize",
+      "agent": "test-worker",
+      "prompt": "You are synthesizing two research reports. There should be two output files from earlier stages in this pipeline run directory — one about market research and one about technology research. Find and read both files, then write a 3-sentence executive summary combining both perspectives. Write the summary to your output file.",
+      "depends_on": ["research-market", "research-tech"],
+      "max_retries": 2
+    }
+  ]
+}

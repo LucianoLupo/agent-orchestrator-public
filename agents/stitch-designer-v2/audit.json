@@ -1,0 +1,52 @@
+{
+  "scores": {
+    "mission_clarity": 8,
+    "instruction_quality": 8,
+    "verification_design": 6,
+    "turn_budget_fit": 7,
+    "memory_protocol": 6,
+    "domain_encoding": 9
+  },
+  "overall": 7.3,
+  "critical_issues": [
+    "Verification is shallow: 'poll list_screens up to 3 polls' confirms a screen EXISTS but not whether it reflects the ONE IDEA or broke anti-generic patterns — the agent can check a box without doing good design",
+    "Memory write instructions are vague ('what worked vs failed') with no structured format, so future runs get inconsistent context and can't build on prior learnings systematically",
+    "No explicit fallback for the async poll failure case — if 3 polls return nothing, the harness says 'NEVER retry same screen' but doesn't say what to do next (skip? report? try a different prompt?), leaving the agent stuck",
+    "Phase turn estimates (3-5, 10-20, 5-10, 5-10) sum to 23-45 turns but 100 turns are budgeted — the gap between budget and protocol creates no pressure to be efficient, and agents tend to over-generate when turns are unconstrained"
+  ],
+  "improvements": [
+    {
+      "section": "Verification Rules",
+      "current": "Poll list_screens after EVERY generate. Up to 3 polls. No exceptions. Build a verification table before writing the report. A run with no verified screens is a failed run.",
+      "suggested": "Poll list_screens after EVERY generate. Up to 3 polls. If 3 polls return nothing, skip that screen, log it as FAILED in the verification table, and continue. Verification is not just existence — after getting the screen, score it: (a) Does it reflect the ONE IDEA? (b) Did it break 3+ anti-generic patterns? (c) Is the layout asymmetric or does it default to centered? If score < 2/3, trigger an edit_screens pass before moving on.",
+      "reason": "Current verification only checks existence. The agent can log a screen as verified while it's a generic hero+features layout. Quality gates need to be explicit and tied to the design criteria already defined in the harness."
+    },
+    {
+      "section": "Memory (write instructions)",
+      "current": "Update at end with: 1. Project ID and screen IDs 2. The ONE IDEA that worked (or didn't) 3. Which anti-generic patterns were successfully broken 4. Visual references that produced good results 5. Stitch prompt patterns that worked vs failed",
+      "suggested": "Update at end using this exact structure:\n```\n## Run: [date]\n- projectId: [id]\n- screens: [id1 (HOOK), id2 (PROOF), ...]\n- ONE IDEA: [exact phrase used] — worked: yes/no — why: [one sentence]\n- Anti-generic wins: [list exactly which checklist items were broken]\n- References used: [site] for [what] — result: [good/bad]\n- Prompt pattern: [what the opening sentence was] — output quality: [1-5]\n- Avoid next time: [specific thing that produced generic output]\n```",
+      "reason": "Structured memory format makes future runs actionable. Free-form memory notes accumulate without being scannable, so the agent re-learns lessons instead of building on them."
+    },
+    {
+      "section": "Stitch MCP Tools — async fallback",
+      "current": "ASYNC — empty response is normal. Poll list_screens after every generate. Up to 3 polls. NEVER retry same screen.",
+      "suggested": "ASYNC — empty response is normal. Poll list_screens after every generate. Up to 3 polls with 5-second waits between. If screen not found after 3 polls: log as FAILED, note the prompt that failed in memory, and proceed with remaining screens. Do NOT retry the same prompt — generate a different screen instead. A failed screen does not block the run.",
+      "reason": "Current instruction creates a dead end: the agent knows not to retry but doesn't know what to do next. Without an explicit continue path, agents often either retry anyway or stall."
+    },
+    {
+      "section": "DESIGN PROTOCOL PHASES — turn budget",
+      "current": "Phase 1: Creative Direction (3-5 turns) ... Phase 2: Generate + Verify (10-20 turns) ... Phase 3: Explore Alternatives (5-10 turns) ... Phase 4: Verification + Report (5-10 turns)",
+      "suggested": "Add at the top of the section: **Turn budget: 100 total. Target: Phase 1 ≤10, Phase 2 ≤40, Phase 3 ≤25, Phase 4 ≤15. If you reach 70 turns without entering Phase 4, skip Phase 3 entirely and go directly to verification.** This prevents the most common failure: running out of turns before the report.",
+      "reason": "Without explicit budget allocation per phase, agents burn turns in Phase 2-3 (generation is fun, iterating is easy) and then hit the wall before completing the report. The guardrail forces phase discipline."
+    },
+    {
+      "section": "HOW YOU DESIGN — Step 1",
+      "current": "If you can't fill this in with something SPECIFIC and SURPRISING, stop and think harder.",
+      "suggested": "If you can't fill this in with something SPECIFIC and SURPRISING after two attempts, write down the 3 most generic versions you considered, then explicitly invert one of them. Example: generic = 'dark background with glowing code', inverted = 'white background where the only dark element is the code block — everything else is washed out'. Submit the inverted version.",
+      "reason": "Telling the agent to 'think harder' produces no change in behavior. Giving it a concrete escape hatch (inversion technique) when stuck creates a deterministic path out of the generic trap."
+    }
+  ],
+  "verdict": "The harness has strong domain encoding and clear creative philosophy but needs quality-gated verification (not just existence checks), structured memory format, and explicit turn budget allocation per phase before it will consistently produce high-scoring runs.",
+  "auditedAt": "2026-03-30T17:26:23.609Z",
+  "costUsd": 0.14995725
+}

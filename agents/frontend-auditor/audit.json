@@ -1,0 +1,50 @@
+{
+  "scores": {
+    "mission_clarity": 9,
+    "instruction_quality": 8,
+    "verification_design": 6,
+    "turn_budget_fit": 6,
+    "memory_protocol": 7,
+    "domain_encoding": 9
+  },
+  "overall": 7.5,
+  "critical_issues": [
+    "Turn budget overflow: Orient (2-3) + Analyze (18-22, but 5 domains × up to 5 turns = up to 25) + Synthesize (3-4) + Report (2) = worst case 34 turns against a 30-turn cap. If any domain is complex, the agent hits the wall before writing report.md.",
+    "Memory is read but not acted on: the protocol says 'read your memory' but gives zero instruction on what to do with it. If a prior audit found recurring re-render issues in this codebase, should the agent skip re-checking basics and dive deep? Silence means memory is decorative.",
+    "Verification is entirely self-review with no structural enforcement: the 6-item checklist is checked by the same model instance that wrote the report, with no external signal (file parse, count check, format validator) to catch hallucinated line numbers or mismatched summary counts."
+  ],
+  "improvements": [
+    {
+      "section": "Audit Protocol — Phase 2: Analyze",
+      "current": "Spend 3-5 turns per domain. If running low on turns, prioritize domains 1-3.",
+      "suggested": "Spend at most 4 turns per domain (hard cap). At turn 22, stop analysis immediately and move to Synthesize regardless of remaining domains. Note skipped domains in the report summary.",
+      "reason": "The current budget allows up to 25 turns for analysis alone, which with orient/synthesize/report overhead pushes past 30. A hard per-domain cap prevents the agent from being cut off mid-report."
+    },
+    {
+      "section": "Memory — Phase 1 read instruction",
+      "current": "1. Read your memory for context from prior audits of this codebase",
+      "suggested": "1. Read your memory. If a prior audit of this codebase exists: (a) skip re-checking patterns already confirmed as clean, (b) start analysis with the domain that had the most critical findings last time, (c) note in the report which issues are recurring vs new.",
+      "reason": "Without explicit instruction on how to use memory, the agent reads it and proceeds identically to a fresh run. Memory only adds value if it changes behavior."
+    },
+    {
+      "section": "Verification Checklist",
+      "current": "Before submitting your report, verify: [6 items listed as prose checklist]",
+      "suggested": "Before writing report.md, perform this structural audit: (1) List every finding ID you intend to include. (2) Count them by severity. (3) Verify those counts match what you will write in the Summary section — if they don't match, fix the Summary before writing. (4) For each finding, confirm the file path exists (you visited it) and the line number is from an actual Read result, not inferred.",
+      "reason": "The current checklist is applied after writing, catching errors too late. Front-loading the count reconciliation before writing catches summary/body mismatches and hallucinated line numbers before they appear in the output."
+    },
+    {
+      "section": "Audit Protocol — Phase 2: Analyze — Domain 2: Rendering Performance",
+      "current": "Look for state stored too high in the component tree (lifting state causes unnecessary re-renders of siblings)",
+      "suggested": "Look for state stored too high in the component tree. Specifically: useState at the root layout or page level where only a leaf component consumes it; context providers that wrap the entire app but only serve one subtree; props drilled 3+ levels without memoization at intermediate nodes.",
+      "reason": "'Too high' is vague and model-dependent. Concrete structural signals (root-level state consumed by leaves, full-app context for local data) give the agent a deterministic thing to grep for rather than a judgment call."
+    },
+    {
+      "section": "Target Codebase — no large codebase guidance",
+      "current": "(no instruction for large codebases)",
+      "suggested": "If the source directory contains >100 files, do not attempt exhaustive file-by-file reading. Instead: (1) use grep to find patterns across all files, (2) read only the top 3-5 files per pattern match, (3) note in the report that the audit was pattern-sampled and full coverage would require a deeper run.",
+      "reason": "On a large Next.js app, reading every file would consume the entire turn budget in orient/analyze without reaching the report phase. A sampling strategy with explicit disclosure is better than silent incompleteness."
+    }
+  ],
+  "verdict": "The harness is well-structured and domain-rich but needs a hard per-domain turn cap and memory activation instructions before it can reliably complete reports on complex codebases without hitting the turn ceiling.",
+  "auditedAt": "2026-03-20T03:35:32.237Z"
+}

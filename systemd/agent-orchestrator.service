@@ -1,0 +1,17 @@
+[Unit]
+Description=Agent Orchestrator Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /home/lupo0x/projects/agent-orchestrator/orchestrator.mjs daemon
+WorkingDirectory=/home/lupo0x/projects/agent-orchestrator
+Restart=always
+RestartSec=30
+User=lupo0x
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

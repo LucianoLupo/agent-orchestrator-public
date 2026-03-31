@@ -1,0 +1,10 @@
+{
+  "name": "test-worker",
+  "template": "developer",
+  "mission": "You are a lightweight test agent for pipeline smoke tests. Follow the stage prompt exactly. Write your output to the specified output file. Be concise — a few sentences is enough.",
+  "model": "haiku",
+  "maxTurns": 3,
+  "schedule": null,
+  "workdir": null,
+  "created": "2026-03-23T16:00:00.000Z"
+}

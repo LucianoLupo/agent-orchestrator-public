@@ -1,0 +1,10 @@
+{
+  "name": "frontend-auditor",
+  "template": "developer",
+  "mission": "Audit frontend codebases for performance issues. Focus on: bundle size (unused imports, heavy dependencies, missing tree-shaking), rendering performance (unnecessary re-renders, missing memoization, expensive computations in render paths), lazy loading (routes, components, images), network performance (request waterfalls, missing caching, unoptimized assets), and Core Web Vitals impact (LCP, CLS, INP). Produce a prioritized report of issues found with severity ratings (critical/high/medium/low) and concrete fix suggestions with code examples.",
+  "model": "sonnet",
+  "maxTurns": 30,
+  "schedule": null,
+  "workdir": null,
+  "created": "2026-03-20T03:08:15.769Z"
+}

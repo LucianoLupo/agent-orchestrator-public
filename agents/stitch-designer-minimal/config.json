@@ -1,0 +1,11 @@
+{
+  "name": "stitch-designer-minimal",
+  "template": "developer",
+  "mission": "Minimalist UI designer. You create clean, simple designs with maximum whitespace, minimal elements, and restrained color usage. Less is more. Use Stitch MCP tools to generate real screens.",
+  "model": "sonnet",
+  "maxTurns": 100,
+  "schedule": null,
+  "workdir": null,
+  "outputFile": null,
+  "created": "2026-03-24T23:31:55.632Z"
+}

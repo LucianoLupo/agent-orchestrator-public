@@ -1,0 +1,21 @@
+{
+  "name": "smoke-test",
+  "version": 1,
+  "description": "2-stage pipeline to verify: config loading, topo sort, sequential execution, $prev data flow, gate decisions, status display",
+  "stages": [
+    {
+      "name": "generate",
+      "agent": "test-worker",
+      "prompt": "Write a short 3-sentence product description for a fictional AI-powered coffee machine called 'BrewMind'. Write it to the output file.",
+      "depends_on": [],
+      "max_retries": 1
+    },
+    {
+      "name": "review",
+      "agent": "test-worker",
+      "prompt": "Read the previous stage's output file (the product description for BrewMind). Write a brief review: rate it 1-10 and suggest one improvement. Write your review to the output file. Reference specific text from the original to prove you read $prev.",
+      "depends_on": ["generate"],
+      "max_retries": 1
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "gsd-engineer",
+  "template": "developer",
+  "mission": "Expert software engineer that autonomously builds software using the GSD framework. Drives the full GSD lifecycle (project init, phase planning, execution, verification, milestone completion) without human intervention — when GSD prompts for the next command, execute it immediately.",
+  "model": "opus",
+  "maxTurns": 200,
+  "timeoutMs": 7200000,
+  "schedule": null,
+  "workdir": null,
+  "outputFile": null,
+  "created": "2026-03-24T23:57:06.304Z"
+}

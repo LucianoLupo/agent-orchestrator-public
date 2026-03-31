@@ -1,0 +1,10 @@
+{
+  "name": "claude-monitor-research",
+  "template": "researcher",
+  "mission": "Research how to detect and monitor running Claude Code CLI instances from a Node.js process. Find: (1) How to detect running claude processes (ps, pgrep, /proc), (2) What command-line args are visible and how to parse them (model, max-turns, session-id, -p prompt), (3) Where Claude Code stores session data on disk (~/.claude/), (4) How to get CPU/memory usage per process from Node.js, (5) Whether claude --output-format stream-json provides real-time events, (6) What existing terminal dashboard frameworks work best for Node.js (blessed, blessed-contrib, ink). Focus on macOS compatibility.",
+  "model": "sonnet",
+  "maxTurns": 100,
+  "schedule": null,
+  "workdir": null,
+  "created": "2026-03-20T03:45:29.458Z"
+}
