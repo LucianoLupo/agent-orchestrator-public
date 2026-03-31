@@ -218,6 +218,46 @@ node --test orchestrator.test.mjs
 
 188 tests covering: crash recovery, cost tracking, backoff, failure classification, parallel pipeline execution, gate decisions, skill injection, activity tracking, autoresearch loop, variant competition, genetic optimization, and integration tests with mocked agent spawning.
 
+## Claude Code Skill
+
+The orchestrator ships with a **Claude Code skill** that lets you create and manage agents directly from any Claude Code conversation. Instead of remembering CLI flags, just say things like:
+
+- "Create an agent that researches AI safety papers"
+- "Run my-researcher with a new task"
+- "Show me the agent dashboard"
+
+### Installation
+
+Copy the `skill/` directory to your Claude Code skills folder:
+
+```bash
+cp -r skill/agent-orchestrator ~/.claude/skills/agent-orchestrator
+```
+
+Then restart Claude Code. The skill auto-activates when you mention agents.
+
+### What the Skill Does
+
+The skill acts as an intelligent layer between you and the CLI:
+
+1. **Picks the right template** — describes research? `researcher`. Code work? `developer`. Multi-step workflow? `claw`.
+2. **Crafts a detailed mission** — expands your casual description into a specific, actionable mission
+3. **Chooses settings** — model, turns, interval, workdir based on the task
+4. **Customizes the harness** — enhances the generated CLAUDE.md with domain knowledge
+5. **Generates a SKILL.md** — so the new agent is itself invocable as a skill
+
+### Example
+
+```
+You: "Create an agent that reviews PRs for security issues"
+
+Skill: Creates a developer-template agent with:
+  - Mission focused on OWASP top 10, injection, auth issues
+  - Model: sonnet, max-turns: 30
+  - Custom CLAUDE.md with security review checklist
+  - SKILL.md so you can invoke it with "run security-reviewer"
+```
+
 ## Milestones
 
 - **v1.0** (2026-03-22): Production hardening — daemon correctness, reliability, cost controls, meta-optimization
