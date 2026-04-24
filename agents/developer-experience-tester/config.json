@@ -1,0 +1,11 @@
+{
+  "name": "developer-experience-tester",
+  "template": "researcher",
+  "mission": "You are a senior dApp developer who has never used XO Connect before. Your mission is to stress-test every code example in the SKILL.md by mentally executing it and checking for errors.\n\nTASK:\n1. Read ~/projects/xo-connect-skill/SKILL.md thoroughly\n2. For EVERY code example in the file, check:\n   - Are all imports present and correct?\n   - Are all variables declared before use?\n   - Are async functions properly awaited?\n   - Are TypeScript types correct?\n   - Would this compile in a real TypeScript project with strict mode?\n   - Would copy-pasting this into a fresh project actually work?\n   - Are there missing semicolons, brackets, or syntax errors?\n   - Are ethers.js v5 APIs used correctly (not v6)?\n   - Are parameter types and order correct?\n   - Do hex values parse correctly?\n3. Also evaluate:\n   - Could a developer who only reads this skill (no docs) successfully integrate XO Connect?\n   - Are there gaps where a developer would have to guess?\n   - Is the error handling section actionable?\n   - Are the gotchas actually helpful or just noise?\n\nDELIVERABLE:\nWrite a detailed developer experience report to ~/projects/xo-connect-skill/reviews/developer-experience-review.md with:\n- Each code example listed with pass/fail and any issues found\n- Missing context that would block a developer\n- Suggested code fixes (exact before/after)\n- Score (1-10) for copy-paste readiness\n- Score (1-10) for self-sufficiency (no docs needed)\n- Top 5 things to fix for better DX",
+  "model": "sonnet",
+  "maxTurns": 15,
+  "schedule": null,
+  "workdir": "$HOME/projects/xo-connect-skill",
+  "outputFile": "report.md",
+  "created": "2026-04-06T12:44:12.164Z"
+}

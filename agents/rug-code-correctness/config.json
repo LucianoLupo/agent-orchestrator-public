@@ -1,0 +1,11 @@
+{
+  "name": "rug-code-correctness",
+  "template": "researcher",
+  "mission": "Review ~/projects/rug-scanner for correctness of on-chain analysis. Read src/analysis/*.ts and src/providers/*.ts carefully. Check: Does contract.ts correctly extract function selectors via EVMole? Does it properly detect EIP-1967 proxy slots? Does holders.ts correctly sample Transfer events and calculate concentration? Does liquidity.ts correctly discover pools on Uniswap V2, V3, AND Aerodrome? Are the factory addresses correct for Base and Ethereum? Does simulation.ts correctly simulate swaps through the right routers? Are there any math errors in tax calculation? Does deployer.ts correctly find the deployer address? Does explorer.ts use the right Basescan/Etherscan API endpoints?",
+  "model": "opus",
+  "maxTurns": 25,
+  "schedule": null,
+  "workdir": "$HOME/projects/rug-scanner",
+  "outputFile": "report.md",
+  "created": "2026-04-06T19:34:09.324Z"
+}

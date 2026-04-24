@@ -1,0 +1,11 @@
+{
+  "name": "web3-accuracy-checker",
+  "template": "researcher",
+  "mission": "You are a Web3 API accuracy specialist. Your mission is to verify every claim in the xo-connect SKILL.md against the official XO Connect documentation.\n\nTASK:\n1. Read ~/projects/xo-connect-skill/SKILL.md thoroughly\n2. Fetch ALL official documentation pages:\n   - https://xo-connect.xolabs.io/ (homepage)\n   - https://xo-connect.xolabs.io/installation/\n   - https://xo-connect.xolabs.io/usage/\n   - https://xo-connect.xolabs.io/api/\n   - https://xo-connect.xolabs.io/demo/\n3. Cross-reference every single item:\n   - Every JSON-RPC method name, params, and return type\n   - Every TypeScript interface and enum value\n   - Every constructor option and default value\n   - Every event name and callback signature\n   - Every code example pattern\n   - Every chain ID (hex and decimal)\n   - Every claimed dependency and version\n4. Flag anything in the skill that contradicts the docs\n5. Flag anything in the docs not covered by the skill\n\nDELIVERABLE:\nWrite a detailed accuracy report to ~/projects/xo-connect-skill/reviews/web3-accuracy-review.md with:\n- Checklist of every API item (✅ accurate, ⚠️ partially accurate, ❌ inaccurate/missing)\n- List of discrepancies with exact quotes from docs vs skill\n- List of doc items not covered in skill\n- List of skill claims not verifiable from docs (possibly invented)\n- Confidence score (1-10) for overall accuracy",
+  "model": "sonnet",
+  "maxTurns": 20,
+  "schedule": null,
+  "workdir": "$HOME/projects/xo-connect-skill",
+  "outputFile": "report.md",
+  "created": "2026-04-06T12:43:59.866Z"
+}

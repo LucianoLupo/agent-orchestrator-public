@@ -39,6 +39,12 @@ A zero-dependency, single-file Node.js CLI and daemon that creates, runs, evalua
 - Agent dashboard: status, costs, evals, running agents overview
 - Safety hooks: bash guard, secret scan, post-edit lint, completion check, activity log
 
+**Natural-Language Agent Generation & Scheduling**
+- `describe "<one sentence>"` parses intent → creates agent → bootstraps harness → installs schedule
+- Bootstrap loop runs audit → improve → re-audit until `domain_encoding` ≥ 6 or budget/iterations exhaust
+- `schedule <name> --cron/--at` installs a native cron schedule (launchd plist on macOS, user crontab on Linux)
+- Per-agent labeling so install/remove never touches other entries in your launchd or crontab
+
 ## Requirements
 
 - Node.js >= 20
@@ -63,6 +69,57 @@ node orchestrator.mjs status my-researcher
 # Start the daemon (runs all scheduled agents)
 node orchestrator.mjs daemon
 ```
+
+## Describe: one sentence → scheduled agent
+
+Turn a one-line description into a fully wired, bootstrapped, scheduled agent in one command. The orchestrator parses intent via Claude (Haiku), creates the agent via `createAgent`, runs an `audit` → `improve` bootstrap loop to specialize its CLAUDE.md, and installs a schedule if you mentioned one.
+
+```bash
+node orchestrator.mjs describe \
+  "Expert bug fixer, runs on /projects/my-app every weekday at 9am, fixes one bug per run, writes report.md"
+```
+
+Output (paraphrased):
+
+```
+Parsing description...
+Proposed spec:
+  Name:       my-app-bug-fixer
+  Template:   developer
+  Mission:    Scan /projects/my-app for bugs and fix one per run...
+  Workdir:    /projects/my-app
+  Schedule:   weekdays 09:00
+Create this agent? [y/N] y
+
+Bootstrapping harness (max 2 iter, budget $0.50)...
+  Bootstrap: 1 iter, domain_encoding=6, stopped=score_threshold, cost=$0.08
+
+Scheduled "my-app-bug-fixer" on darwin: 0 9 * * 1-5
+
+--- Summary ---
+Created agent "my-app-bug-fixer"
+  Mission:    Scan /projects/my-app for bugs and fix one per run...
+  Workdir:    /projects/my-app
+  Schedule:   0 9 * * 1-5
+  Bootstrap:  1 iter, domain_encoding=6, stopped=score_threshold
+  Cost:       $0.1067 / $0.5000 budget
+```
+
+Flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--yes` | Skip the interactive confirmation prompt |
+| `--dry-run` | Print the parsed spec, create nothing |
+| `--no-bootstrap` | Skip the audit + improve bootstrap loop |
+| `--no-schedule` | Don't install an OS schedule even if the spec has one |
+| `--max-iterations <n>` | Bootstrap iterations cap (default: 2) |
+| `--cost-budget <usd>` | Total USD cap across parse + bootstrap (default: 1.0) |
+| `--model <m>` | Override the model for the created agent |
+
+Typical cost is **$0.10–$0.50** depending on how many bootstrap iterations the harness needs to reach `domain_encoding ≥ 6`. The bootstrap loop terminates early once any of the stop conditions hit: score threshold met, iterations exhausted, or budget exhausted.
+
+`describe` is a composition of existing primitives — `parseDescription` (LLM call), `createAgent`, `auditAgent`, `improveAgent`, and `scheduleInstall`. No new LLM infrastructure.
 
 ## CLI Reference
 
@@ -108,6 +165,22 @@ orchestrator logs <name>               Show latest run output
 orchestrator delete <name>             Remove an agent
 orchestrator daemon                    Start the scheduling daemon
   --max-concurrent <n>                 Max parallel agents (default: 3)
+
+orchestrator describe "<description>"  NL → create + bootstrap + schedule an agent
+  --yes                                Skip interactive confirmation
+  --dry-run                            Print parsed spec, don't create anything
+  --no-bootstrap                       Skip the audit+improve bootstrap loop
+  --no-schedule                        Don't install OS schedule even if spec has one
+  --max-iterations <n>                 Bootstrap iterations (default: 2)
+  --cost-budget <usd>                  Total USD cap across LLM calls (default: 1.0)
+  --model <m>                          Override model for the created agent
+
+orchestrator schedule <name> --cron "<expr>"  Install cron schedule (launchd on macOS, crontab on Linux)
+orchestrator schedule <name> --at "<sugar>"   Sugar: "hourly", "daily 09:00", "weekdays 09:00", "weekly mon 09:00"
+orchestrator schedule <name> --remove         Uninstall cron schedule (idempotent)
+orchestrator schedule <name>                  Show current schedule + OS artifact status
+orchestrator schedule list                    List all agents with a cron schedule
+  --force                                     Allow replacing an existing intervalSeconds schedule
 
 orchestrator pipeline validate <name>  Validate pipeline config
 orchestrator pipeline run <name>       Run a pipeline
@@ -194,6 +267,58 @@ node orchestrator.mjs pipeline run research-and-review
 
 After each stage, a Claude supervisor evaluates the output and decides to proceed, retry with feedback, or abort the pipeline.
 
+## Scheduling
+
+The daemon (above) runs agents on **interval** schedules (`--interval 3600` → every hour). For **time-of-day / day-of-week** scheduling, use `orchestrator schedule`, which installs a native cron entry (launchd plist on macOS, user crontab on Linux).
+
+```bash
+# Schedule an existing agent to run weekdays at 9am
+node orchestrator.mjs schedule my-agent --cron "0 9 * * 1-5"
+
+# One-liner sugar (expanded to cron internally)
+node orchestrator.mjs schedule my-agent --at "hourly"           # 0 * * * *
+node orchestrator.mjs schedule my-agent --at "daily 09:00"      # 0 9 * * *
+node orchestrator.mjs schedule my-agent --at "weekdays 09:00"   # 0 9 * * 1-5
+node orchestrator.mjs schedule my-agent --at "weekly mon 09:00" # 0 9 * * 1
+
+# Show current schedule + OS artifact status
+node orchestrator.mjs schedule my-agent
+
+# Uninstall (idempotent)
+node orchestrator.mjs schedule my-agent --remove
+
+# List all scheduled agents
+node orchestrator.mjs schedule list
+```
+
+| Platform | Artifact | Location |
+|----------|----------|----------|
+| macOS | launchd plist | `~/Library/LaunchAgents/com.agent-orchestrator.<name>.plist` |
+| Linux | user crontab line | appended to `crontab -l`, tagged with `# agent-orchestrator:<name>` |
+
+Per-agent labels mean install/remove only touches the one entry for that agent — your other launchd or crontab entries are left alone. Removal is idempotent (no error if nothing is installed).
+
+**Mutual exclusivity with the daemon's interval scheduler:** a given agent can't have both `schedule.intervalSeconds` (daemon loop) and `schedule.cron` (OS-level cron). If an interval is already configured, `schedule --cron` errors out. Pass `--force` to replace the interval with cron. This prevents double-firing.
+
+### Timezones
+
+All schedules fire in the **local system time** of the host running the orchestrator. The orchestrator itself does not manage timezones — it hands the cron expression to launchd or cron as-is.
+
+- **Linux (user crontab):** add a `CRON_TZ=<zone>` line above your `agent-orchestrator` marker line via `crontab -e`. That pin is per-user, per-crontab, and the orchestrator will preserve it on re-install (it only touches lines with its own marker).
+- **macOS (launchd):** there is no `CRON_TZ` equivalent — launchd always uses the user's system timezone. To fire at a specific wall-clock time in a foreign zone, either run the orchestrator on a host configured to that zone, or convert manually (e.g. "9am Buenos Aires" → "12:00 UTC" on a UTC host).
+
+Worked examples, assuming you want **09:00 America/Buenos_Aires** (UTC-3):
+
+```bash
+# Linux, UTC-configured server — add CRON_TZ to your crontab once:
+#   CRON_TZ=America/Buenos_Aires
+# then:
+node orchestrator.mjs schedule my-agent --at "daily 09:00"
+
+# macOS or Linux without CRON_TZ — shift by hand:
+node orchestrator.mjs schedule my-agent --cron "0 12 * * *"   # 12:00 UTC == 09:00 ART
+```
+
 ## Environment Variables
 
 | Variable | Purpose |
@@ -217,46 +342,6 @@ node --test orchestrator.test.mjs
 ```
 
 188 tests covering: crash recovery, cost tracking, backoff, failure classification, parallel pipeline execution, gate decisions, skill injection, activity tracking, autoresearch loop, variant competition, genetic optimization, and integration tests with mocked agent spawning.
-
-## Claude Code Skill
-
-The orchestrator ships with a **Claude Code skill** that lets you create and manage agents directly from any Claude Code conversation. Instead of remembering CLI flags, just say things like:
-
-- "Create an agent that researches AI safety papers"
-- "Run my-researcher with a new task"
-- "Show me the agent dashboard"
-
-### Installation
-
-Copy the `skill/` directory to your Claude Code skills folder:
-
-```bash
-cp -r skill/agent-orchestrator ~/.claude/skills/agent-orchestrator
-```
-
-Then restart Claude Code. The skill auto-activates when you mention agents.
-
-### What the Skill Does
-
-The skill acts as an intelligent layer between you and the CLI:
-
-1. **Picks the right template** — describes research? `researcher`. Code work? `developer`. Multi-step workflow? `claw`.
-2. **Crafts a detailed mission** — expands your casual description into a specific, actionable mission
-3. **Chooses settings** — model, turns, interval, workdir based on the task
-4. **Customizes the harness** — enhances the generated CLAUDE.md with domain knowledge
-5. **Generates a SKILL.md** — so the new agent is itself invocable as a skill
-
-### Example
-
-```
-You: "Create an agent that reviews PRs for security issues"
-
-Skill: Creates a developer-template agent with:
-  - Mission focused on OWASP top 10, injection, auth issues
-  - Model: sonnet, max-turns: 30
-  - Custom CLAUDE.md with security review checklist
-  - SKILL.md so you can invoke it with "run security-reviewer"
-```
 
 ## Milestones
 

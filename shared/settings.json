@@ -44,6 +44,40 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/projects/agent-orchestrator/shared/hooks/pre-prompt-reminder.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/projects/agent-orchestrator/shared/hooks/session-start-context.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/projects/agent-orchestrator/shared/hooks/pre-compact-backup.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -51,6 +85,12 @@
             "type": "command",
             "command": "bash ~/projects/agent-orchestrator/shared/hooks/stop-completion-check.sh",
             "timeout": 5
+          },
+          {
+            "type": "prompt",
+            "prompt": "You are a completion gate. The agent just stopped. Look at $ARGUMENTS (stop event JSON with last_assistant_message, session_id, etc.) and decide if the work is actually complete given the agent's apparent mission. If the agent promised an action it didn't take ('I'll now...' without follow-through, unresolved TODOs, missing output file), return {\"ok\": false, \"reason\": \"<specific issue>\"}. If stop_hook_active is true, return {\"ok\": true} immediately to prevent loops. Otherwise return {\"ok\": true}.",
+            "model": "haiku",
+            "timeout": 30
           }
         ]
       }

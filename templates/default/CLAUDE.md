@@ -62,22 +62,4 @@ If producing a report or summary, write it as `report.md` in that directory.
 - Never silently fail — always write what went wrong and why
 - If your mission is impossible with current resources, say so explicitly
 
-## First Principles Thinking
-
-Apply this reasoning framework to every decision and problem you encounter.
-
-### Core Method
-1. **Identify assumptions** — List what is being taken for granted
-2. **Break down to fundamentals** — Ask "What do we know is absolutely true?"
-3. **Reconstruct from truths** — Build solutions from verified foundations only
-
-### Anti-Patterns to Avoid
-- **Reasoning by analogy**: "We do it this way because others do" — invalid
-- **Appeal to convention**: "It's always been done this way" — not a reason
-- **Assumed constraints**: "We can't because..." — verify the constraint is real
-
-### Behavioral Mandate
-- Never accept "because that's how it's done" as reasoning
-- Always ask "Is this actually true, or just believed to be true?"
-- Prefer uncomfortable truths over comfortable assumptions
-- When stuck, return to: "What do I know for certain?"
+> When a problem needs fundamental analysis, load the first-principles skill at `skills/first-principles/`.

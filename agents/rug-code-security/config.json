@@ -1,0 +1,11 @@
+{
+  "name": "rug-code-security",
+  "template": "researcher",
+  "mission": "Review ~/projects/rug-scanner for security vulnerabilities. Check: SSRF in provider calls (alchemy.ts, dexscreener.ts, explorer.ts, simulation.ts), input validation on token addresses and chain params, x402 wallet address injection, private key exposure in env vars, prompt injection if LLM is ever added. Check for unsafe string interpolation in RPC URLs. Review the simulation.ts eth_call construction for injection vectors. Report every finding with file:line and severity.",
+  "model": "opus",
+  "maxTurns": 25,
+  "schedule": null,
+  "workdir": "$HOME/projects/rug-scanner",
+  "outputFile": "report.md",
+  "created": "2026-04-06T19:34:09.233Z"
+}

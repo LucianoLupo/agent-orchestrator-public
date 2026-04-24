@@ -1,0 +1,11 @@
+{
+  "name": "rug-code-architecture",
+  "template": "researcher",
+  "mission": "Review ~/projects/rug-scanner architecture and code quality. Read ALL source files. Check: Is the Hono app properly structured? Is error handling consistent? Does Promise.allSettled degradation work correctly? Is the scorer logic sound (threshold-based verdicts)? Are types comprehensive? Is the cache layer correct (TTL, key format, invalidation)? Are there any circular dependencies? Is the x402 middleware configured correctly? Rate overall code quality 1-10 with specific issues.",
+  "model": "opus",
+  "maxTurns": 25,
+  "schedule": null,
+  "workdir": "$HOME/projects/rug-scanner",
+  "outputFile": "report.md",
+  "created": "2026-04-06T19:34:09.280Z"
+}

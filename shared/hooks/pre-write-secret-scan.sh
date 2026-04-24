@@ -51,6 +51,25 @@ echo "$CONTENT" | grep -qE 'gh[pousr]_[A-Za-z0-9_]{36,}' && FOUND="${FOUND}GitHu
 # JWT tokens
 echo "$CONTENT" | grep -qE 'eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*' && FOUND="${FOUND}JWT Token, "
 
+# Anthropic keys (MUST be checked before OpenAI: both start with sk-, and bash
+# grep -E has no negative lookahead, so we de-dupe via ordering + a flag)
+ANTHROPIC_HIT=0
+if echo "$CONTENT" | grep -qE 'sk-ant-[A-Za-z0-9_-]{80,}'; then
+  FOUND="${FOUND}Anthropic Key, "
+  ANTHROPIC_HIT=1
+fi
+
+# Stripe keys (sk_live_ / sk_test_)
+echo "$CONTENT" | grep -qE 'sk_(live|test)_[A-Za-z0-9]{24,}' && FOUND="${FOUND}Stripe Key, "
+
+# SendGrid keys
+echo "$CONTENT" | grep -qE 'SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}' && FOUND="${FOUND}SendGrid Key, "
+
+# OpenAI keys (sk- + 48 alphanumerics). Skip if Anthropic already matched.
+if [ "$ANTHROPIC_HIT" -eq 0 ]; then
+  echo "$CONTENT" | grep -qE 'sk-[A-Za-z0-9]{48}' && FOUND="${FOUND}OpenAI Key, "
+fi
+
 if [ -n "$FOUND" ]; then
   FOUND="${FOUND%, }"  # trim trailing comma
   echo "WARNING: Potential secrets detected in ${FILE_PATH##*/}: ${FOUND}. If intentional (e.g. config file), confirm with the user before proceeding." >&2

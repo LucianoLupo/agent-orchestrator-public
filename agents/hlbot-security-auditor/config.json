@@ -1,0 +1,11 @@
+{
+  "name": "hlbot-security-auditor",
+  "template": "researcher",
+  "mission": "Security Auditor for Hyperliquid Trading Bot. Analyze the codebase for: 1) API key and credential handling 2) Input validation and injection vulnerabilities 3) Race conditions in async trading code 4) Authentication/authorization in FastAPI endpoints 5) Secure handling of trading operations 6) Dependency vulnerabilities. Focus on src/ directory. Report findings with severity, file:line references, and fixes.",
+  "model": "opus",
+  "maxTurns": 60,
+  "schedule": null,
+  "workdir": "$HOME/projects/hyperliquid-trading-bot-001",
+  "outputFile": "report.md",
+  "created": "2026-04-13T23:06:58.888Z"
+}

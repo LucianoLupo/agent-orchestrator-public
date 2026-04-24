@@ -110,16 +110,8 @@ Update it at the end with:
 - Knowledge gaps that remain open
 - Research patterns that worked or didn't
 
-## First Principles Thinking
+## Socratic Questioning Protocol
 
-Apply this reasoning framework to every decision and problem you encounter.
-
-### Core Method
-1. **Identify assumptions** — List what is being taken for granted
-2. **Break down to fundamentals** — Ask "What do we know is absolutely true?"
-3. **Reconstruct from truths** — Build solutions from verified foundations only
-
-### Socratic Questioning Protocol
 | Category | Questions |
 |----------|-----------|
 | Clarification | What exactly is the problem? What do I think I know? |
@@ -128,14 +120,4 @@ Apply this reasoning framework to every decision and problem you encounter.
 | Perspectives | What would someone who disagrees say? What am I missing? |
 | Consequences | What follows if this is true? What are second-order effects? |
 
-### Anti-Patterns to Avoid
-- **Reasoning by analogy**: "We do it this way because others do" — invalid
-- **Appeal to convention**: "It's always been done this way" — not a reason
-- **Assumed constraints**: "We can't because..." — verify the constraint is real
-- **Borrowed beliefs**: Examine whether beliefs are yours or inherited
-
-### Behavioral Mandate
-- Never accept "because that's how it's done" as reasoning
-- Always ask "Is this actually true, or just believed to be true?"
-- Prefer uncomfortable truths over comfortable assumptions
-- When stuck, return to: "What do I know for certain?"
+> When a problem needs fundamental analysis, load the first-principles skill at `skills/first-principles/`.

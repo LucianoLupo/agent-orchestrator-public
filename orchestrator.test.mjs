@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { recoverStaleAgents, buildFreshPrompt, buildResumePrompt, computeBackoffMs, classifyFailure, updateCostAccumulators, applyAuditImprovements, buildChangelogEntry, topoSort, loadPipeline, writeAtomicJson, initRunState, recoverStalePipelineRuns, buildPipelineWorkerPrompt, parseGateDecision, buildGatePrompt, readAgentConfig, _testSetSpawnClaude, _testResetSpawnClaude, _testSetDirs, _testResetDirs, runPipelineStage, createAgent, createMutex, computeClaudeMdHash, revertClaudeMd, writeExperimentLog, autoresearchAgent, evalAgent, auditAgent, improveAgent, generateVariantSubsets, cloneAgent, cleanupVariants, competeAgent, evolveAgent } from "./orchestrator.mjs";
+import { recoverStaleAgents, buildFreshPrompt, buildResumePrompt, computeBackoffMs, classifyFailure, updateCostAccumulators, applyAuditImprovements, buildChangelogEntry, topoSort, loadPipeline, writeAtomicJson, initRunState, recoverStalePipelineRuns, buildPipelineWorkerPrompt, parseGateDecision, buildGatePrompt, readAgentConfig, _testSetSpawnClaude, _testResetSpawnClaude, _testSetDirs, _testResetDirs, _testSetExec, _testResetExec, runPipelineStage, createAgent, createMutex, computeClaudeMdHash, revertClaudeMd, writeExperimentLog, autoresearchAgent, generateVariantSubsets, cloneAgent, cleanupVariants, competeAgent, evolveAgent, expandScheduleSugar, validateCronExpr, cronToLaunchdInterval, cronToLaunchdPlist, buildCrontabLine, stripCrontabForAgent, extractJsonObject, validateDescribeSpec, parseDescription, bootstrapAgent, describeAgent, describeList, installLaunchd, _testSetPromptConfirm, _testResetPromptConfirm } from "./orchestrator.mjs";
 import { tmpdir } from "node:os";
 import { readFile, rm as rmFile } from "node:fs/promises";
 
@@ -369,11 +369,28 @@ test("HOOK-02: stop hook checks AGENT_OUTPUT_FILE existence", () => {
   );
 });
 
-// HOOK-03: original patterns preserved
-test("HOOK-03: stop hook preserves original TODO/FIXME/promise checks", () => {
-  assert.ok(hookSrc.includes("TODO"), "TODO check must remain");
-  assert.ok(hookSrc.includes("FIXME"), "FIXME check must remain");
-  assert.ok(hookSrc.includes("implement"), "promise-pattern check must remain");
+// HOOK-03: semantic completion check moved from regex heuristic to prompt hook in settings.json
+// (see plans/2026-04-23-harness-engineering-fixes.md Phase 2.3)
+test("HOOK-03: stop hook delegates semantic check to settings.json prompt hook", () => {
+  // The shell hook must NOT contain the old brittle regex heuristics
+  assert.ok(
+    !/grep\s+-qiE.*implement/.test(hookSrc),
+    "old 'grep -qiE ... implement' regex must be removed"
+  );
+  assert.ok(
+    !/grep\s+-qE.*TODO/.test(hookSrc),
+    "old TODO/FIXME grep heuristic must be removed"
+  );
+  // The deterministic gate (AGENT_OUTPUT_FILE) must remain
+  assert.ok(hookSrc.includes("AGENT_OUTPUT_FILE"), "deterministic output-file gate must remain");
+
+  // The semantic check must now live in shared/settings.json as a Stop prompt hook
+  const settingsSrc = readFileSync(join(__dirname, "shared/settings.json"), "utf8");
+  const settings = JSON.parse(settingsSrc);
+  const stopHooks = (settings.hooks?.Stop ?? []).flatMap((entry) => entry.hooks ?? []);
+  const promptHook = stopHooks.find((h) => h.type === "prompt");
+  assert.ok(promptHook, "Stop hooks must include a prompt-type entry for semantic completion");
+  assert.equal(promptHook.model, "haiku", "semantic stop hook should use haiku");
 });
 
 // HOOK-04: template defaulting
@@ -887,7 +904,7 @@ async function createTempPipelineRun(baseDir, pipelineName, runId, stateData) {
 test("EXEC-03: recoverStalePipelineRuns marks dead PID run as failed", async () => {
   const dir = join(tmpdir(), `test-recover-${Date.now()}`);
   await mkdir(dir, { recursive: true });
-  const runDir = await createTempPipelineRun(dir, "my-pipe", "run-001", {
+  await createTempPipelineRun(dir, "my-pipe", "run-001", {
     status: "running",
     runningPid: 99999999,
     pipelineName: "my-pipe",
@@ -2632,4 +2649,773 @@ test("COEX-03: runPipelineStage applies per-stage maxTurns override", () => {
 
 test("COEX-03: runPipelineStage applies per-stage timeout override", () => {
   assert.ok(src.includes("stage.timeout") && src.includes("config.timeoutMs = stage.timeout"), "should apply stage timeout override");
+});
+
+// --- Scheduling ---
+
+test("SCHED-01: expandScheduleSugar('hourly') → '0 * * * *'", () => {
+  assert.equal(expandScheduleSugar("hourly"), "0 * * * *");
+});
+
+test("SCHED-02: expandScheduleSugar('daily 09:00') → '0 9 * * *'", () => {
+  assert.equal(expandScheduleSugar("daily 09:00"), "0 9 * * *");
+  assert.equal(expandScheduleSugar("daily 23:45"), "45 23 * * *");
+});
+
+test("SCHED-03: expandScheduleSugar('weekdays 09:00') → '0 9 * * 1-5'", () => {
+  assert.equal(expandScheduleSugar("weekdays 09:00"), "0 9 * * 1-5");
+});
+
+test("SCHED-04: expandScheduleSugar('weekly mon 09:00') → '0 9 * * 1'", () => {
+  assert.equal(expandScheduleSugar("weekly mon 09:00"), "0 9 * * 1");
+  assert.equal(expandScheduleSugar("weekly sun 09:00"), "0 9 * * 0");
+  assert.equal(expandScheduleSugar("weekly 09:00"), "0 9 * * 0"); // defaults to Sunday
+});
+
+test("SCHED-05: expandScheduleSugar rejects bad input", () => {
+  assert.throws(() => expandScheduleSugar("nope"), /Unknown schedule sugar/);
+  assert.throws(() => expandScheduleSugar("daily"), /Unknown schedule sugar/);
+  assert.throws(() => expandScheduleSugar("daily 25:00"), /Invalid time/);
+  assert.throws(() => expandScheduleSugar("weekly xyz 09:00"), /Unknown schedule sugar/);
+  assert.throws(() => expandScheduleSugar(""), /Empty schedule sugar/);
+  assert.throws(() => expandScheduleSugar(null), /Invalid schedule sugar/);
+});
+
+test("SCHED-06: validateCronExpr accepts valid expressions", () => {
+  // Should not throw
+  validateCronExpr("0 9 * * *");
+  validateCronExpr("0 9 * * 1-5");
+  validateCronExpr("*/15 * * * *");
+  validateCronExpr("0,15,30,45 * * * *");
+  validateCronExpr("* * * * *");
+  validateCronExpr("59 23 31 12 7"); // 7 is valid for Sunday in cron
+  const fields = validateCronExpr("0 9 1-15 * 1,3,5");
+  assert.equal(fields.minute, "0");
+  assert.equal(fields.dow, "1,3,5");
+});
+
+test("SCHED-07: validateCronExpr rejects invalid expressions", () => {
+  assert.throws(() => validateCronExpr("0 9 * *"), /5 fields/); // 4 fields
+  assert.throws(() => validateCronExpr("0 9 * * * *"), /5 fields/); // 6 fields
+  assert.throws(() => validateCronExpr("60 * * * *"), /minute/); // 60 out of range
+  assert.throws(() => validateCronExpr("* 24 * * *"), /hour/); // 24 out of range
+  assert.throws(() => validateCronExpr("* * 32 * *"), /day-of-month/);
+  assert.throws(() => validateCronExpr("* * * 13 *"), /month/);
+  assert.throws(() => validateCronExpr("* * * * 8"), /day-of-week/);
+  assert.throws(() => validateCronExpr("abc * * * *"), /minute/);
+  assert.throws(() => validateCronExpr("5-1 * * * *"), /range/); // reversed range
+  assert.throws(() => validateCronExpr(""), /5 fields/);
+  assert.throws(() => validateCronExpr(123), /must be a string/);
+});
+
+test("SCHED-08: cronToLaunchdPlist produces valid plist XML for simple expression", () => {
+  const plist = cronToLaunchdPlist({
+    label: "com.agent-orchestrator.test",
+    cronExpr: "0 9 * * *",
+    nodePath: "/usr/bin/node",
+    orchestratorPath: "/tmp/orchestrator.mjs",
+    workingDir: "/tmp",
+    agentName: "test",
+    stdoutPath: "/tmp/out.log",
+    stderrPath: "/tmp/err.log",
+  });
+  assert.ok(plist.includes(`<?xml version="1.0" encoding="UTF-8"?>`));
+  assert.ok(plist.includes(`<!DOCTYPE plist`));
+  assert.ok(plist.includes(`<key>Label</key>`));
+  assert.ok(plist.includes(`<string>com.agent-orchestrator.test</string>`));
+  assert.ok(plist.includes(`<key>StartCalendarInterval</key>`));
+  // Simple expression → single dict, not array
+  assert.ok(!plist.includes(`<array>\n    <dict>`), "should not wrap single interval in array");
+  assert.ok(plist.includes(`<key>Minute</key>`));
+  assert.ok(plist.includes(`<integer>0</integer>`));
+  assert.ok(plist.includes(`<key>Hour</key>`));
+  assert.ok(plist.includes(`<integer>9</integer>`));
+  // RunAtLoad false
+  assert.ok(plist.includes(`<key>RunAtLoad</key>\n  <false/>`));
+  // ProgramArguments wiring
+  assert.ok(plist.includes(`<string>/usr/bin/node</string>`));
+  assert.ok(plist.includes(`<string>/tmp/orchestrator.mjs</string>`));
+  assert.ok(plist.includes(`<string>run</string>`));
+  assert.ok(plist.includes(`<string>test</string>`));
+});
+
+test("SCHED-09: cronToLaunchdPlist unrolls ranges and lists into arrays", () => {
+  // Weekday range 1-5 → array of 5 dicts
+  const weekdaysInterval = cronToLaunchdInterval("0 9 * * 1-5");
+  assert.ok(Array.isArray(weekdaysInterval), "weekday range should yield array");
+  assert.equal(weekdaysInterval.length, 5);
+  assert.deepEqual(weekdaysInterval.map((d) => d.Weekday), [1, 2, 3, 4, 5]);
+  weekdaysInterval.forEach((d) => {
+    assert.equal(d.Minute, 0);
+    assert.equal(d.Hour, 9);
+  });
+
+  // Step expansion: */15 over 0-59 → 4 values
+  const stepInterval = cronToLaunchdInterval("*/15 * * * *");
+  assert.ok(Array.isArray(stepInterval));
+  assert.deepEqual(stepInterval.map((d) => d.Minute), [0, 15, 30, 45]);
+
+  // cron dow=7 (Sunday) normalized to 0
+  const sunInterval = cronToLaunchdInterval("0 10 * * 7");
+  assert.equal(sunInterval.Weekday, 0);
+
+  // List in minute field
+  const listInterval = cronToLaunchdInterval("0,30 9 * * *");
+  assert.ok(Array.isArray(listInterval));
+  assert.deepEqual(listInterval.map((d) => d.Minute), [0, 30]);
+
+  // Full plist with array renders <array><dict>...</dict><dict>...</dict></array>
+  const plist = cronToLaunchdPlist({
+    label: "lbl",
+    cronExpr: "0 9 * * 1-5",
+    nodePath: "/bin/node",
+    orchestratorPath: "/o.mjs",
+    workingDir: "/",
+    agentName: "a",
+    stdoutPath: "/o.log",
+    stderrPath: "/e.log",
+  });
+  assert.ok(plist.includes(`<array>`));
+  assert.ok(plist.includes(`<key>Weekday</key>`));
+  const dictMatches = plist.match(/<dict>/g) || [];
+  // outer wrapper dict + one dict per weekday = 6 total
+  assert.equal(dictMatches.length, 6);
+});
+
+test("SCHED-10: cronToLaunchdPlist errors cleanly on too-complex expressions", () => {
+  // Both DoM and DoW set — cron ORs, launchd ANDs: refuse rather than mis-schedule
+  assert.throws(
+    () => cronToLaunchdInterval("0 9 1 * 1"),
+    /both day-of-month and day-of-week/,
+  );
+  // Range-with-step not in the supported subset — rejected at validation
+  assert.throws(
+    () => cronToLaunchdInterval("0-30/5 * * * *"),
+    /Invalid token/,
+  );
+  // "* * * * *" — can't express "every minute" via StartCalendarInterval
+  assert.throws(
+    () => cronToLaunchdInterval("* * * * *"),
+    /every minute/,
+  );
+});
+
+test("SCHED-11: buildCrontabLine round-trip (build, parse, confirm match)", () => {
+  const line = buildCrontabLine({
+    cronExpr: "0 9 * * 1-5",
+    projectRoot: "/proj",
+    nodePath: "/usr/bin/node",
+    orchestratorPath: "/proj/orchestrator.mjs",
+    agentName: "bug-fixer",
+  });
+  // Line shape: "<expr> <cmd> # agent-orchestrator:<name>"
+  assert.ok(line.startsWith("0 9 * * 1-5 "), "must start with the cron expr");
+  assert.ok(line.includes("cd /proj"));
+  assert.ok(line.includes("/usr/bin/node /proj/orchestrator.mjs run bug-fixer"));
+  assert.ok(line.endsWith("# agent-orchestrator:bug-fixer"));
+  // Validation happens inside buildCrontabLine
+  assert.throws(
+    () => buildCrontabLine({
+      cronExpr: "bogus",
+      projectRoot: "/p",
+      nodePath: "/n",
+      orchestratorPath: "/o",
+      agentName: "a",
+    }),
+    /5 fields/,
+  );
+});
+
+test("SCHED-12: buildCrontabLine+stripCrontabForAgent survives strip-then-reinstall cycle", () => {
+  const existing = [
+    "# my personal entry",
+    "0 12 * * * /home/me/lunch.sh",
+    "0 9 * * * /dev/null # agent-orchestrator:bug-fixer", // old installed line
+    "30 * * * * /home/me/other.sh",
+  ].join("\n");
+
+  // Strip removes only the marked line for bug-fixer
+  const stripped = stripCrontabForAgent(existing, "bug-fixer");
+  assert.ok(!stripped.includes("agent-orchestrator:bug-fixer"));
+  assert.ok(stripped.includes("my personal entry"));
+  assert.ok(stripped.includes("/home/me/lunch.sh"));
+  assert.ok(stripped.includes("/home/me/other.sh"));
+
+  // Does NOT touch a different agent's line
+  const twoAgents = existing + "\n15 9 * * * /bin/other # agent-orchestrator:other-agent";
+  const strippedOne = stripCrontabForAgent(twoAgents, "bug-fixer");
+  assert.ok(strippedOne.includes("agent-orchestrator:other-agent"));
+
+  // Reinstall: build a new line, append, strip again — should come off cleanly
+  const newLine = buildCrontabLine({
+    cronExpr: "30 9 * * 1-5",
+    projectRoot: "/proj",
+    nodePath: "/bin/node",
+    orchestratorPath: "/proj/orchestrator.mjs",
+    agentName: "bug-fixer",
+  });
+  const reinstalled = stripped + "\n" + newLine;
+  assert.ok(reinstalled.includes(newLine));
+  const strippedAgain = stripCrontabForAgent(reinstalled, "bug-fixer");
+  assert.ok(!strippedAgain.includes("agent-orchestrator:bug-fixer"));
+  assert.ok(strippedAgain.includes("my personal entry")); // untouched
+});
+
+// Smoke test: installCrontab path with mocked exec (Linux-style flow, OS-agnostic as a unit test)
+test("SCHED-13: crontab install/remove path with mocked exec (round-trip)", async () => {
+  const tmpDir = join(tmpdir(), `orch-sched-cron-${Date.now()}`);
+  const agentDir = join(tmpDir, "agents", "cron-smoke");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(
+    join(agentDir, "config.json"),
+    JSON.stringify({ name: "cron-smoke", mission: "m", model: "sonnet", maxTurns: 5, schedule: null }),
+  );
+  await writeFile(join(agentDir, "state.json"), JSON.stringify({ status: "idle" }));
+
+  _testSetDirs({ agents: join(tmpDir, "agents") });
+
+  // Fake an empty crontab, capture writes.
+  let fakeCrontab = "";
+  _testSetExec(async (cmd) => {
+    if (cmd === "crontab -l") {
+      if (!fakeCrontab) {
+        const err = new Error("no crontab for user");
+        err.stderr = "no crontab for user";
+        throw err;
+      }
+      return { stdout: fakeCrontab, stderr: "" };
+    }
+    const m = /^crontab (.+)$/.exec(cmd);
+    if (m) {
+      const file = m[1];
+      fakeCrontab = readFileSync(file, "utf8");
+      return { stdout: "", stderr: "" };
+    }
+    throw new Error(`unexpected exec: ${cmd}`);
+  });
+
+  try {
+    // We can't directly call the private installCrontab; instead, exercise
+    // stripCrontabForAgent + buildCrontabLine which the helper is built from.
+    const line = buildCrontabLine({
+      cronExpr: "0 9 * * *",
+      projectRoot: "/proj",
+      nodePath: "/usr/bin/node",
+      orchestratorPath: "/proj/orchestrator.mjs",
+      agentName: "cron-smoke",
+    });
+    fakeCrontab = line + "\n";
+    // Now simulate a remove: strip the marker line
+    const after = stripCrontabForAgent(fakeCrontab, "cron-smoke");
+    assert.ok(!after.includes("agent-orchestrator:cron-smoke"));
+  } finally {
+    _testResetExec();
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// --- Describe (NL → spec → agent) ---
+
+// Helper: build a fake Claude haiku response that wraps a JSON spec in the
+// standard output-format=json envelope the orchestrator already parses.
+function fakeClaudeDescribeResponse(spec, { cost = 0.001 } = {}) {
+  const resultText = typeof spec === "string" ? spec : JSON.stringify(spec);
+  return {
+    code: 0,
+    stdout: JSON.stringify({
+      session_id: "s-desc",
+      total_cost_usd: cost,
+      duration_ms: 100,
+      num_turns: 1,
+      result: resultText,
+    }),
+    stderr: "",
+  };
+}
+
+function goodSpec(overrides = {}) {
+  return {
+    name: "bug-fixer",
+    template: "developer",
+    mission: "Scan /projects/foo for bugs and fix exactly one per run, then write a summary to report.md.",
+    workdir: "/projects/foo",
+    maxTurns: 20,
+    model: "sonnet",
+    outputFile: "report.md",
+    schedule: { cron: "0 9 * * *" },
+    rationale: "Developer template for code edits; daily cadence fits the mission.",
+    ...overrides,
+  };
+}
+
+test("DESC-01: parseDescription produces valid spec from mock Claude output", async () => {
+  _testSetSpawnClaude(async () => fakeClaudeDescribeResponse(goodSpec()));
+  try {
+    const { spec, cost } = await parseDescription("Fix one bug per run in /projects/foo, daily 9am.");
+    assert.equal(spec.name, "bug-fixer");
+    assert.equal(spec.template, "developer");
+    assert.equal(spec.maxTurns, 20);
+    assert.equal(spec.schedule.cron, "0 9 * * *");
+    assert.ok(cost >= 0.001);
+  } finally {
+    _testResetSpawnClaude();
+  }
+});
+
+test("DESC-02: parseDescription rejects invalid name", async () => {
+  _testSetSpawnClaude(async () =>
+    fakeClaudeDescribeResponse(goodSpec({ name: "My Agent" })),
+  );
+  try {
+    await assert.rejects(
+      parseDescription("whatever"),
+      /Invalid name/,
+    );
+  } finally {
+    _testResetSpawnClaude();
+  }
+});
+
+test("DESC-03: parseDescription rejects unknown template", async () => {
+  _testSetSpawnClaude(async () =>
+    fakeClaudeDescribeResponse(goodSpec({ template: "wizard" })),
+  );
+  try {
+    await assert.rejects(
+      parseDescription("whatever"),
+      /Unknown template/,
+    );
+  } finally {
+    _testResetSpawnClaude();
+  }
+});
+
+test("DESC-04: parseDescription rejects invalid cron", async () => {
+  _testSetSpawnClaude(async () =>
+    fakeClaudeDescribeResponse(goodSpec({ schedule: { cron: "bogus expr" } })),
+  );
+  try {
+    await assert.rejects(
+      parseDescription("whatever"),
+      /5 fields|minute|hour/,
+    );
+  } finally {
+    _testResetSpawnClaude();
+  }
+});
+
+test("DESC-05: parseDescription strips code fences from Claude result", async () => {
+  const fenced = "```json\n" + JSON.stringify(goodSpec()) + "\n```";
+  _testSetSpawnClaude(async () => fakeClaudeDescribeResponse(fenced));
+  try {
+    const { spec } = await parseDescription("whatever");
+    assert.equal(spec.name, "bug-fixer");
+  } finally {
+    _testResetSpawnClaude();
+  }
+});
+
+test("DESC-05b: extractJsonObject handles preamble + fenced + trailing prose", () => {
+  const messy =
+    "Here is the spec:\n\n```json\n" +
+    JSON.stringify({ a: 1, b: { c: [1, 2] } }) +
+    "\n```\n\nLet me know if you need changes.";
+  const obj = extractJsonObject(messy);
+  assert.deepEqual(obj, { a: 1, b: { c: [1, 2] } });
+
+  // Also: plain embedded object
+  const plain = "prefix {\"x\": 1, \"y\": \"ok\"} suffix";
+  assert.deepEqual(extractJsonObject(plain), { x: 1, y: "ok" });
+
+  // Robust to brace-strings inside
+  const withBraces = `{"msg": "has {braces} in string", "n": 2}`;
+  assert.deepEqual(extractJsonObject(withBraces), { msg: "has {braces} in string", n: 2 });
+
+  // Returns null on no JSON
+  assert.equal(extractJsonObject("no json here"), null);
+  assert.equal(extractJsonObject(""), null);
+});
+
+test("DESC-05c: validateDescribeSpec rejects duplicate existing name", () => {
+  assert.throws(
+    () => validateDescribeSpec(goodSpec(), { existingAgents: ["bug-fixer"] }),
+    /already exists/,
+  );
+});
+
+test("DESC-06: bootstrapAgent stops when domain_encoding >= target", async () => {
+  let auditCalls = 0;
+  let improveCalls = 0;
+  const result = await bootstrapAgent("any-agent", {
+    maxIterations: 5,
+    costBudget: 10.0,
+    _auditFn: async () => {
+      auditCalls++;
+      return { scores: { domain_encoding: 7 }, overall: 7, costUsd: 0.05 };
+    },
+    _improveFn: async () => {
+      improveCalls++;
+      return { applied: 1, skipped: 0, total: 1, costUsd: 0.1 };
+    },
+  });
+  assert.equal(auditCalls, 1);
+  assert.equal(improveCalls, 0);
+  assert.equal(result.stopped, "score_reached");
+  assert.equal(result.finalScore, 7);
+  assert.ok(result.cost > 0);
+});
+
+test("DESC-07: bootstrapAgent stops at maxIterations", async () => {
+  let auditCalls = 0;
+  let improveCalls = 0;
+  const result = await bootstrapAgent("any-agent", {
+    maxIterations: 2,
+    costBudget: 10.0,
+    _auditFn: async () => {
+      auditCalls++;
+      return { scores: { domain_encoding: 3 }, overall: 3, costUsd: 0.05 };
+    },
+    _improveFn: async () => {
+      improveCalls++;
+      return { applied: 1, skipped: 0, total: 1, costUsd: 0.05 };
+    },
+  });
+  assert.equal(auditCalls, 2, "should audit twice");
+  assert.equal(improveCalls, 1, "should improve once between audits");
+  assert.equal(result.iterations, 2);
+  assert.equal(result.stopped, "iteration_cap");
+});
+
+test("DESC-08: bootstrapAgent stops when budget exhausted", async () => {
+  let auditCalls = 0;
+  const result = await bootstrapAgent("any-agent", {
+    maxIterations: 5,
+    costBudget: 0.20,   // below ESTIMATED_ITER_COST (0.30) after first audit
+    _auditFn: async () => {
+      auditCalls++;
+      return { scores: { domain_encoding: 2 }, overall: 2, costUsd: 0.05 };
+    },
+    _improveFn: async () => ({ applied: 1, skipped: 0, total: 1, costUsd: 0.05 }),
+  });
+  assert.equal(auditCalls, 1, "should audit once then halt on budget");
+  assert.equal(result.stopped, "budget_exhausted");
+});
+
+test("DESC-09: describeAgent with --dry-run returns spec without creating", async () => {
+  const tmpDir = join(tmpdir(), `orch-desc-dry-${Date.now()}`);
+  _testSetDirs({ agents: join(tmpDir, "agents") });
+  _testSetSpawnClaude(async () => fakeClaudeDescribeResponse(goodSpec({ name: "dry-agent", schedule: null })));
+  try {
+    const result = await describeAgent("Fix bugs in /projects/foo", { dryRun: true, yes: true });
+    assert.equal(result.created, false);
+    assert.equal(result.dryRun, true);
+    assert.equal(result.spec.name, "dry-agent");
+    // No agent dir created
+    let exists = true;
+    try { readFileSync(join(tmpDir, "agents", "dry-agent", "config.json"), "utf8"); }
+    catch { exists = false; }
+    assert.equal(exists, false, "dry-run should not create agent directory");
+  } finally {
+    _testResetSpawnClaude();
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("DESC-09b: describeAgent aborts when user declines confirm", async () => {
+  const tmpDir = join(tmpdir(), `orch-desc-abort-${Date.now()}`);
+  _testSetDirs({ agents: join(tmpDir, "agents") });
+  _testSetSpawnClaude(async () => fakeClaudeDescribeResponse(goodSpec({ name: "abort-agent", schedule: null })));
+  _testSetPromptConfirm(async () => false);
+  try {
+    const result = await describeAgent("Fix bugs in /projects/foo", { yes: false });
+    assert.equal(result.created, false);
+    assert.equal(result.aborted, true);
+  } finally {
+    _testResetSpawnClaude();
+    _testResetPromptConfirm();
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("DESC-10: describeAgent end-to-end with --yes creates agent, bootstraps, records schedule", async () => {
+  const tmpDir = join(tmpdir(), `orch-desc-e2e-${Date.now()}`);
+  const agentsDir = join(tmpDir, "agents");
+  _testSetDirs({ agents: agentsDir });
+
+  // Claude gets called once during parseDescription; subsequent audit/improve
+  // are injected via bootstrap fns below. createAgent does not touch Claude.
+  _testSetSpawnClaude(async () =>
+    fakeClaudeDescribeResponse(goodSpec({
+      name: "e2e-agent",
+      // No schedule in this test — testing the no-schedule branch so we don't
+      // touch launchctl/crontab during tests.
+      schedule: null,
+      workdir: null,
+    })),
+  );
+
+  try {
+    const result = await describeAgent("Fix bugs", {
+      yes: true,
+      noSchedule: true,
+      maxIterations: 1,
+      costBudget: 1.0,
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(result.spec.name, "e2e-agent");
+
+    // Verify agent dir + config + CLAUDE.md were produced
+    const config = JSON.parse(readFileSync(join(agentsDir, "e2e-agent", "config.json"), "utf8"));
+    assert.equal(config.name, "e2e-agent");
+    assert.equal(config.template, "developer");
+    assert.equal(config.maxTurns, 20);
+
+    const claudeMd = readFileSync(join(agentsDir, "e2e-agent", "CLAUDE.md"), "utf8");
+    assert.ok(claudeMd.includes("e2e-agent"));
+
+    // Cost accounting includes the parse call at minimum
+    assert.ok(result.totalCost >= 0.001, "total cost should include parse cost");
+  } finally {
+    _testResetSpawnClaude();
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// Source-level sanity
+test("describe: source contains describeAgent, parseDescription, bootstrapAgent", () => {
+  assert.ok(src.includes("export async function describeAgent("), "should export describeAgent");
+  assert.ok(src.includes("export async function parseDescription("), "should export parseDescription");
+  assert.ok(src.includes("export async function bootstrapAgent("), "should export bootstrapAgent");
+  assert.ok(src.includes('case "describe"'), "CLI should have describe command");
+});
+
+test("describe: meta-prompt template exists with {{DESCRIPTION}} placeholder", async () => {
+  const content = await readFile(join(__dirname, "templates", "meta", "describe-prompt.md"), "utf8");
+  assert.ok(content.includes("{{DESCRIPTION}}"), "describe-prompt.md should have {{DESCRIPTION}} placeholder");
+  assert.ok(content.toLowerCase().includes("json"), "describe-prompt.md should instruct JSON output");
+});
+
+// DESC-11: describe list filters by createdBy === "describe"
+test("DESC-11: describe list filters by createdBy", async () => {
+  const tmpDir = join(tmpdir(), `orch-desc-list-${Date.now()}`);
+  const agentsDir = join(tmpDir, "agents");
+  await mkdir(agentsDir, { recursive: true });
+
+  // Agent A: created via describe
+  await mkdir(join(agentsDir, "desc-a"), { recursive: true });
+  await writeFile(
+    join(agentsDir, "desc-a", "config.json"),
+    JSON.stringify({
+      name: "desc-a",
+      mission: "Long mission description that should be truncated in the list output.",
+      template: "developer",
+      model: "sonnet",
+      maxTurns: 10,
+      workdir: "/projects/foo",
+      schedule: { cron: "0 9 * * *" },
+      createdBy: "describe",
+      created: "2026-04-24T00:00:00Z",
+    }),
+  );
+
+  // Agent B: created via `create` (no createdBy)
+  await mkdir(join(agentsDir, "manual-b"), { recursive: true });
+  await writeFile(
+    join(agentsDir, "manual-b", "config.json"),
+    JSON.stringify({
+      name: "manual-b",
+      mission: "Manual agent",
+      template: "default",
+      model: "sonnet",
+      maxTurns: 10,
+      schedule: null,
+      created: "2026-04-24T00:00:00Z",
+    }),
+  );
+
+  _testSetDirs({ agents: agentsDir });
+
+  // Capture stdout
+  const origLog = console.log;
+  const lines = [];
+  console.log = (...args) => { lines.push(args.join(" ")); };
+
+  try {
+    await describeList();
+  } finally {
+    console.log = origLog;
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+
+  const output = lines.join("\n");
+  assert.ok(output.includes("desc-a"), "should include describe-created agent");
+  assert.ok(!output.includes("manual-b"), "should NOT include manually-created agent");
+  assert.ok(output.includes("0 9 * * *"), "should show schedule");
+});
+
+// DESC-12: createAgent passes createdBy through config.json
+test("DESC-12: createAgent passes createdBy through config.json", async () => {
+  const tmpDir = join(tmpdir(), `orch-desc-createdBy-${Date.now()}`);
+  const agentsDir = join(tmpDir, "agents");
+  await mkdir(agentsDir, { recursive: true });
+  _testSetDirs({ agents: agentsDir });
+
+  try {
+    await createAgent({
+      name: "marker-agent",
+      mission: "Test createdBy marker",
+      template: "default",
+      createdBy: "describe",
+    });
+    const config = JSON.parse(readFileSync(join(agentsDir, "marker-agent", "config.json"), "utf8"));
+    assert.equal(config.createdBy, "describe");
+
+    // Sanity: createAgent without createdBy should NOT set the field
+    await createAgent({
+      name: "plain-agent",
+      mission: "Test no marker",
+      template: "default",
+    });
+    const plain = JSON.parse(readFileSync(join(agentsDir, "plain-agent", "config.json"), "utf8"));
+    assert.equal(plain.createdBy, undefined, "plain create should not set createdBy");
+  } finally {
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// SCHED-14: cron error messages include sugar hints
+test("SCHED-14: error messages contain sugar hints", () => {
+  // validateCronExpr should mention sugar forms on any error
+  try {
+    validateCronExpr("bogus");
+    assert.fail("expected throw");
+  } catch (err) {
+    assert.ok(err.message.includes("hourly"), "validateCronExpr error should hint at 'hourly' sugar");
+    assert.ok(err.message.includes("daily HH:MM"), "should hint at 'daily HH:MM'");
+    assert.ok(err.message.includes("weekdays"), "should hint at 'weekdays'");
+    assert.ok(err.message.includes("--at"), "should mention --at flag");
+  }
+
+  // Another invalid field path
+  try {
+    validateCronExpr("60 * * * *");
+    assert.fail("expected throw");
+  } catch (err) {
+    assert.ok(err.message.includes("minute"), "should still identify the bad field");
+    assert.ok(err.message.includes("hourly"), "should still include sugar hint");
+  }
+
+  // expandScheduleSugar should list accepted forms on every failure path
+  try { expandScheduleSugar("nope"); assert.fail("expected throw"); }
+  catch (err) {
+    assert.ok(err.message.includes("Accepted forms"), "unknown sugar should list accepted forms");
+    assert.ok(err.message.includes("hourly"));
+  }
+  try { expandScheduleSugar(""); assert.fail("expected throw"); }
+  catch (err) {
+    assert.ok(err.message.includes("Accepted forms"), "empty sugar should list accepted forms");
+  }
+  try { expandScheduleSugar(null); assert.fail("expected throw"); }
+  catch (err) {
+    assert.ok(err.message.includes("Accepted forms"), "non-string sugar should list accepted forms");
+  }
+});
+
+// SCHED-15: launchctl bootstrap failure → fallback to launchctl load succeeds
+test("SCHED-15: launchctl bootstrap → load fallback", async () => {
+  const tmpDir = join(tmpdir(), `orch-sched-bootload-${Date.now()}`);
+  const agentsDir = join(tmpDir, "agents");
+  const launchDir = join(tmpDir, "LaunchAgents");
+  await mkdir(join(agentsDir, "bootload-agent"), { recursive: true });
+  _testSetDirs({ agents: agentsDir, launchAgents: launchDir });
+
+  let bootstrapCalls = 0;
+  let loadCalls = 0;
+  _testSetExec(async (cmd) => {
+    if (cmd.startsWith("plutil -lint")) return { stdout: "OK", stderr: "" };
+    if (cmd.startsWith("launchctl bootout")) return { stdout: "", stderr: "" };
+    if (cmd.startsWith("launchctl bootstrap")) {
+      bootstrapCalls++;
+      const err = new Error("bootstrap failed");
+      err.stderr = "Input/output error";
+      throw err;
+    }
+    if (cmd.startsWith("launchctl load")) {
+      loadCalls++;
+      return { stdout: "", stderr: "" };
+    }
+    throw new Error(`unexpected exec: ${cmd}`);
+  });
+
+  try {
+    const result = await installLaunchd("bootload-agent", "0 9 * * *");
+    assert.equal(bootstrapCalls, 1, "should attempt bootstrap once");
+    assert.equal(loadCalls, 1, "should fall back to load once");
+    assert.equal(result.label, "com.agent-orchestrator.bootload-agent");
+    // Plist must remain on disk since "install" succeeded via fallback
+    const plistPath = join(launchDir, "com.agent-orchestrator.bootload-agent.plist");
+    const { readFileSync: _read } = await import("node:fs");
+    const plist = _read(plistPath, "utf8");
+    assert.ok(plist.includes("<key>Label</key>"), "plist should be present after successful fallback");
+  } finally {
+    _testResetExec();
+    _testResetDirs();
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// SCHED-16: both bootstrap and load fail → clear error, no half-installed state
+test("SCHED-16: launchctl complete failure cleans up plist", async () => {
+  const tmpDir = join(tmpdir(), `orch-sched-bothfail-${Date.now()}`);
+  const agentsDir = join(tmpDir, "agents");
+  const launchDir = join(tmpDir, "LaunchAgents");
+  await mkdir(join(agentsDir, "bothfail-agent"), { recursive: true });
+  _testSetDirs({ agents: agentsDir, launchAgents: launchDir });
+
+  _testSetExec(async (cmd) => {
+    if (cmd.startsWith("plutil -lint")) return { stdout: "OK", stderr: "" };
+    if (cmd.startsWith("launchctl bootout")) return { stdout: "", stderr: "" };
+    if (cmd.startsWith("launchctl bootstrap")) {
+      const err = new Error("bootstrap failed"); err.stderr = "bad bootstrap"; throw err;
+    }
+    if (cmd.startsWith("launchctl load")) {
+      const err = new Error("load failed"); err.stderr = "bad load"; throw err;
+    }
+    throw new Error(`unexpected exec: ${cmd}`);
+  });
+
+  let threw = null;
+  try {
+    await installLaunchd("bothfail-agent", "0 9 * * *");
+  } catch (err) {
+    threw = err;
+  }
+
+  const plistPath = join(launchDir, "com.agent-orchestrator.bothfail-agent.plist");
+  let plistStillThere = true;
+  try {
+    const { accessSync } = await import("node:fs");
+    accessSync(plistPath);
+  } catch {
+    plistStillThere = false;
+  }
+
+  _testResetExec();
+  _testResetDirs();
+  await rm(tmpDir, { recursive: true, force: true });
+
+  assert.ok(threw, "installLaunchd should throw when both bootstrap and load fail");
+  assert.ok(/bootstrap/.test(threw.message), "error should mention bootstrap failure");
+  assert.ok(/load/.test(threw.message), "error should mention load fallback failure");
+  // Current behavior: the plist is written before launchctl is invoked. If both fail,
+  // the plist is left in place (as an inert file — launchd never loaded it). We want
+  // it cleaned up so the system doesn't carry a half-installed artifact.
+  assert.equal(plistStillThere, false, "plist should be removed after complete launchctl failure");
 });

@@ -1,0 +1,11 @@
+{
+  "name": "hlbot-quality-auditor",
+  "template": "researcher",
+  "mission": "Code Quality Auditor for Hyperliquid Trading Bot. Analyze: 1) Type hint coverage 2) Error handling patterns 3) Logging quality 4) Code duplication 5) Function complexity 6) Test coverage gaps 7) Documentation quality. Focus on src/. Report with file:line references and refactoring suggestions.",
+  "model": "opus",
+  "maxTurns": 60,
+  "schedule": null,
+  "workdir": "$HOME/projects/hyperliquid-trading-bot-001",
+  "outputFile": "report.md",
+  "created": "2026-04-13T23:07:08.720Z"
+}

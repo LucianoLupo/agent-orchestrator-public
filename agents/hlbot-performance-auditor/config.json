@@ -1,0 +1,11 @@
+{
+  "name": "hlbot-performance-auditor",
+  "template": "researcher",
+  "mission": "Performance Auditor for Hyperliquid Trading Bot. Analyze: 1) Async/await patterns 2) Database/API call efficiency 3) Memory usage with pandas DataFrames 4) Caching opportunities 5) Concurrency bottlenecks 6) Hot paths in trading loop. Focus on src/main.py, src/trading/, src/indicators/. Report with impact and optimizations.",
+  "model": "opus",
+  "maxTurns": 60,
+  "schedule": null,
+  "workdir": "$HOME/projects/hyperliquid-trading-bot-001",
+  "outputFile": "report.md",
+  "created": "2026-04-13T23:07:01.871Z"
+}

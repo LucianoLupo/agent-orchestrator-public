@@ -1,0 +1,11 @@
+{
+  "name": "rug-test-plan-quality",
+  "template": "researcher",
+  "mission": "Read all 3 test plans in ~/projects/rug-scanner/test/PLAN-*.md AND the source code they reference. Audit for QUALITY: (1) Are the mock data examples realistic? Will they actually trigger the right code paths? (2) Are expected outputs correct? Trace through the scoring logic — if a token has flags X Y Z, does the plan expect the right verdict? (3) Are there redundant tests (same thing tested multiple ways without value)? (4) Are the plans implementable as-is or too vague to code from? (5) Do the plans follow vitest patterns correctly (describe/it/expect)? (6) Estimate total number of tests across all 3 plans. Save findings to ~/projects/rug-scanner/test/AUDIT-plan-quality.md",
+  "model": "opus",
+  "maxTurns": 25,
+  "schedule": null,
+  "workdir": "$HOME/projects/rug-scanner",
+  "outputFile": "report.md",
+  "created": "2026-04-07T14:25:37.671Z"
+}

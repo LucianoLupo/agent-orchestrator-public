@@ -7,9 +7,41 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 
 [ -z "$COMMAND" ] && exit 0
 
-# rm -rf with dangerous targets (root, home, entire project dirs)
-if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|--force\s+)*(\/|~|\$HOME|\.\.)\s*$'; then
+# rm with recursive+force targeting dangerous paths (root, home, parent dirs).
+# Matches any path that STARTS with /, ~, $HOME, or .. — catches rm -rf ~/Desktop
+# (the "Mike Wolak case") because tilde expansion makes the whole subtree disappear.
+# Forms blocked:
+#   rm -rf /…   rm -rf ~…   rm -rf ~/…   rm -fr $HOME/…   rm -rf ../…
+#   rm --recursive --force ~…   rm --force --recursive ~…
+RM_DANGER_TARGET='(/|~|\$HOME|\.\.)'
+# Combined short flags containing both r and f in any order (e.g. -rf, -fr, -rfv, -vrf)
+if echo "$COMMAND" | grep -qE "^[[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)[[:space:]]+${RM_DANGER_TARGET}"; then
   echo "BLOCKED: rm -rf targeting root, home, or parent directory. Confirm with user first." >&2
+  exit 2
+fi
+# Long flags --recursive --force in either order, possibly separated by other flags
+if echo "$COMMAND" | grep -qE "^[[:space:]]*rm[[:space:]]+.*(--recursive[[:space:]]+.*--force|--force[[:space:]]+.*--recursive)[[:space:]]+${RM_DANGER_TARGET}"; then
+  echo "BLOCKED: rm --recursive --force targeting root, home, or parent directory. Confirm with user first." >&2
+  exit 2
+fi
+
+# Pipe remote content directly to a shell (curl|bash, wget|sh, etc.)
+if echo "$COMMAND" | grep -qE '(curl|wget)[^|]*\|[[:space:]]*(ba|z|fi|da)?sh\b'; then
+  echo "BLOCKED: piping remote content to shell. Download, inspect, then run." >&2
+  exit 2
+fi
+
+# find ... -delete  (mass delete, no undo)
+if echo "$COMMAND" | grep -qE 'find[[:space:]]+.*[[:space:]]-delete\b'; then
+  echo "BLOCKED: find -delete is irreversible, confirm with user." >&2
+  exit 2
+fi
+
+# Unqualified DELETE FROM (no WHERE clause). Matches DELETE FROM <table> terminated
+# by ; " ' or end-of-string, with no WHERE keyword following the table name.
+if echo "$COMMAND" | grep -iqE 'delete[[:space:]]+from[[:space:]]+[a-zA-Z_][a-zA-Z0-9_.]*[[:space:]]*(;|"|'"'"'|$)' \
+   && ! echo "$COMMAND" | grep -iqE 'delete[[:space:]]+from[[:space:]]+[a-zA-Z_][a-zA-Z0-9_.]*[[:space:]]+where\b'; then
+  echo "BLOCKED: DELETE without WHERE clause. Confirm with user first." >&2
   exit 2
 fi
 

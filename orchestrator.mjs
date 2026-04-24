@@ -10,7 +10,8 @@
  * Zero dependencies — Node.js built-ins only.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, exec } from "node:child_process";
+import { promisify } from "node:util";
 import {
   readFile,
   writeFile,
@@ -24,14 +25,18 @@ import {
   cp,
   symlink,
   rename,
+  unlink,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
+import { homedir, tmpdir } from "node:os";
 
 // --- Constants ---
 
 const ROOT = new URL(".", import.meta.url).pathname.replace(/\/$/, "");
+const ORCHESTRATOR_PATH = fileURLToPath(import.meta.url);
 const AGENTS_DIR = join(ROOT, "agents");
 const PIPELINES_DIR = join(ROOT, "pipelines");
 const TEMPLATES_DIR = join(ROOT, "templates");
@@ -497,6 +502,7 @@ export async function createAgent(opts) {
     subModel = "sonnet",
     subMaxTurns = 100,
     workflow = "",
+    createdBy = null,
   } = opts;
 
   if (!name) throw new Error("--name is required");
@@ -510,25 +516,15 @@ export async function createAgent(opts) {
 
   // Create directory structure
   await mkdir(join(agentDir, ".claude", "memory"), { recursive: true });
-  await mkdir(join(agentDir, ".claude", "rules"), { recursive: true });
   await mkdir(join(agentDir, "skills"), { recursive: true });
   await mkdir(join(agentDir, "runs"), { recursive: true });
 
-  // Copy shared assets (hooks, rules, first-principles)
+  // Copy shared assets (hooks, first-principles)
   if (await exists(SHARED_DIR)) {
     // Copy hooks settings.json → agent .claude/settings.json
     const sharedSettings = join(SHARED_DIR, "settings.json");
     if (await exists(sharedSettings)) {
       await copyFile(sharedSettings, join(agentDir, ".claude", "settings.json"));
-    }
-
-    // Copy language rules → agent .claude/rules/
-    const sharedRules = join(SHARED_DIR, "rules");
-    if (await exists(sharedRules)) {
-      const ruleFiles = await readdir(sharedRules);
-      for (const f of ruleFiles) {
-        await copyFile(join(sharedRules, f), join(agentDir, ".claude", "rules", f));
-      }
     }
 
     // Copy first-principles skill → agent skills/
@@ -594,6 +590,7 @@ export async function createAgent(opts) {
     outputFile: resolvedOutputFile || null,
     created: iso(),
   };
+  if (createdBy) config.createdBy = createdBy;
   await writeJson(join(agentDir, "config.json"), config);
 
   // State
@@ -672,6 +669,402 @@ exec ${CLAUDE_BIN} \\
   if (workdir) console.log(`  Workdir:  ${workdir}`);
   console.log(`\n  Run: node orchestrator.mjs run ${name}`);
   console.log(`  Or:  ./agents/${name}/run.sh`);
+}
+
+// --- Describe (natural language → agent) ---
+
+const DESCRIBE_TEMPLATE = join(TEMPLATES_DIR, "meta", "describe-prompt.md");
+const DESCRIBE_MODEL = "haiku";
+const DESCRIBE_MAX_TURNS = 1;
+const KNOWN_TEMPLATES = ["default", "developer", "researcher", "claw"];
+const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,29}$/;
+
+// Pull the first balanced JSON object out of a string. Tolerates code fences,
+// preamble, and trailing prose — but the spec itself must be valid JSON.
+export function extractJsonObject(text) {
+  if (typeof text !== "string" || text.length === 0) return null;
+  // Strip ``` fences if present (```json ... ``` or ``` ... ```)
+  let s = text.trim();
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```\s*$/i.exec(s);
+  if (fence) s = fence[1].trim();
+  const first = s.indexOf("{");
+  if (first === -1) return null;
+  // Walk forward tracking brace depth, respecting strings
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  for (let i = first; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (c === "\\") { escape = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        const candidate = s.slice(first, i + 1);
+        try { return JSON.parse(candidate); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+export function validateDescribeSpec(spec, { existingAgents = [] } = {}) {
+  if (!spec || typeof spec !== "object") {
+    throw new Error("Spec must be an object");
+  }
+  if (typeof spec.name !== "string" || !AGENT_NAME_RE.test(spec.name)) {
+    throw new Error(
+      `Invalid name "${spec.name}" — must be kebab-case, 1-30 chars, [a-z0-9-], start with [a-z0-9]`,
+    );
+  }
+  if (existingAgents.includes(spec.name)) {
+    throw new Error(`Agent "${spec.name}" already exists`);
+  }
+  if (!KNOWN_TEMPLATES.includes(spec.template)) {
+    throw new Error(
+      `Unknown template "${spec.template}" — must be one of: ${KNOWN_TEMPLATES.join(", ")}`,
+    );
+  }
+  if (typeof spec.mission !== "string" || spec.mission.trim().length < 10) {
+    throw new Error(`Mission must be a non-trivial string (got: ${JSON.stringify(spec.mission)})`);
+  }
+  if (!(Number.isInteger(spec.maxTurns) && spec.maxTurns >= 1 && spec.maxTurns <= 100)) {
+    throw new Error(`maxTurns must be an integer 1-100 (got: ${spec.maxTurns})`);
+  }
+  if (spec.model != null && typeof spec.model !== "string") {
+    throw new Error(`model must be a string or null`);
+  }
+  if (spec.workdir != null && typeof spec.workdir !== "string") {
+    throw new Error(`workdir must be a string or null`);
+  }
+  if (spec.outputFile != null && typeof spec.outputFile !== "string") {
+    throw new Error(`outputFile must be a string or null`);
+  }
+  if (spec.schedule != null) {
+    if (typeof spec.schedule !== "object") {
+      throw new Error(`schedule must be an object or null`);
+    }
+    const { cron, at } = spec.schedule;
+    if (cron && at) throw new Error(`schedule must have 'cron' OR 'at', not both`);
+    if (!cron && !at) throw new Error(`schedule must have 'cron' or 'at'`);
+    if (cron) validateCronExpr(cron);
+    if (at) expandScheduleSugar(at); // throws if invalid
+  }
+  return true;
+}
+
+// Call Claude (haiku) with the describe meta-prompt. Returns { spec, cost, raw }.
+export async function parseDescription(description, { existingAgents = [] } = {}) {
+  if (typeof description !== "string" || !description.trim()) {
+    throw new Error("Description must be a non-empty string");
+  }
+  let prompt = await readFile(DESCRIBE_TEMPLATE, "utf8");
+  prompt = prompt.replaceAll("{{DESCRIPTION}}", description.trim());
+
+  const args = [
+    "--dangerously-skip-permissions",
+    "--max-turns",
+    String(DESCRIBE_MAX_TURNS),
+    "--output-format",
+    "json",
+    "--model",
+    DESCRIBE_MODEL,
+    "-p",
+    prompt,
+  ];
+
+  const { code, stdout, stderr } = await _spawnClaudeFn(args, { timeout: 2 * 60 * 1000 });
+  if (code !== 0) {
+    throw new Error(`parseDescription: claude exited ${code}: ${(stderr || "").slice(0, 300)}`);
+  }
+
+  let claudeOutput;
+  try {
+    claudeOutput = JSON.parse(stdout);
+  } catch (err) {
+    throw new Error(`parseDescription: could not parse claude stdout as JSON: ${err.message}`);
+  }
+  const resultText = claudeOutput.result ?? "";
+  const cost = typeof claudeOutput.total_cost_usd === "number" ? claudeOutput.total_cost_usd : 0;
+
+  const spec = extractJsonObject(resultText);
+  if (!spec) {
+    throw new Error(
+      `parseDescription: could not extract JSON spec from claude result.\nResult was: ${String(resultText).slice(0, 500)}`,
+    );
+  }
+
+  validateDescribeSpec(spec, { existingAgents });
+  return { spec, cost, raw: resultText };
+}
+
+// Bootstrap loop: audit → if score low and budget allows → improve → re-audit.
+// Returns { iterations, finalScore, cost, stopped }.
+export async function bootstrapAgent(name, {
+  maxIterations = 2,
+  costBudget = 1.0,
+  targetScore = 6,
+  _auditFn = auditAgent,
+  _improveFn = improveAgent,
+} = {}) {
+  // Rough floor for another audit+improve cycle
+  const ESTIMATED_ITER_COST = 0.30;
+
+  let iterations = 0;
+  let totalCost = 0;
+  let lastAudit = null;
+  let stopped = "cap";
+
+  while (iterations < maxIterations) {
+    const audit = await _auditFn(name);
+    const auditCost = (audit && typeof audit.costUsd === "number") ? audit.costUsd : 0;
+    totalCost += auditCost;
+    lastAudit = audit;
+
+    const score = audit?.scores?.domain_encoding ?? null;
+    iterations++;
+
+    if (score != null && score >= targetScore) {
+      stopped = "score_reached";
+      break;
+    }
+
+    if (totalCost + ESTIMATED_ITER_COST > costBudget) {
+      stopped = "budget_exhausted";
+      break;
+    }
+
+    if (iterations >= maxIterations) {
+      stopped = "iteration_cap";
+      break;
+    }
+
+    const improveResult = await _improveFn(name, { apply: true });
+    const improveCost = (improveResult && typeof improveResult.costUsd === "number") ? improveResult.costUsd : 0;
+    totalCost += improveCost;
+
+    if (totalCost + ESTIMATED_ITER_COST > costBudget) {
+      stopped = "budget_exhausted";
+      break;
+    }
+  }
+
+  return {
+    iterations,
+    finalScore: lastAudit?.scores?.domain_encoding ?? null,
+    finalOverall: lastAudit?.overall ?? null,
+    cost: totalCost,
+    stopped,
+  };
+}
+
+function printDescribeSpec(spec) {
+  console.log(`\nParsed spec:`);
+  console.log(`  Name:       ${spec.name}`);
+  console.log(`  Template:   ${spec.template}`);
+  console.log(`  Model:      ${spec.model || "sonnet"}`);
+  console.log(`  Max turns:  ${spec.maxTurns}`);
+  console.log(`  Workdir:    ${spec.workdir || "(agent dir)"}`);
+  console.log(`  Output:     ${spec.outputFile || "(none)"}`);
+  if (spec.schedule) {
+    const s = spec.schedule.cron ? `cron: ${spec.schedule.cron}` : `at: ${spec.schedule.at}`;
+    console.log(`  Schedule:   ${s}`);
+  } else {
+    console.log(`  Schedule:   (none)`);
+  }
+  console.log(`  Mission:    ${spec.mission}`);
+  if (spec.rationale) console.log(`  Rationale:  ${spec.rationale}`);
+  console.log();
+}
+
+// Zero-dep interactive confirm. Returns boolean. Injectable for tests.
+let _promptConfirmFn = async (question) => {
+  const readline = await import("node:readline");
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(`${question} [y/N] `, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test((answer || "").trim()));
+    });
+    rl.on("SIGINT", () => { rl.close(); resolve(false); });
+  });
+};
+export function _testSetPromptConfirm(fn) { _promptConfirmFn = fn; }
+export function _testResetPromptConfirm() {
+  _promptConfirmFn = async (question) => {
+    const readline = await import("node:readline");
+    return new Promise((resolve) => {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      rl.question(`${question} [y/N] `, (answer) => {
+        rl.close();
+        resolve(/^y(es)?$/i.test((answer || "").trim()));
+      });
+      rl.on("SIGINT", () => { rl.close(); resolve(false); });
+    });
+  };
+}
+
+// End-to-end: NL description → parsed spec → created agent → bootstrapped → scheduled.
+export async function describeAgent(description, opts = {}) {
+  const {
+    yes = false,
+    dryRun = false,
+    noBootstrap = false,
+    noSchedule = false,
+    maxIterations = 2,
+    costBudget = 1.0,
+    model: modelOverride = null,
+  } = opts;
+
+  // List existing agents so validation can reject duplicates early
+  let existingAgents = [];
+  try {
+    const entries = await readdir(_agentsDir, { withFileTypes: true });
+    existingAgents = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    // agents dir may not exist yet; that's fine
+  }
+
+  console.log(`Parsing description via Claude (${DESCRIBE_MODEL})...`);
+  const { spec, cost: parseCost } = await parseDescription(description, { existingAgents });
+
+  if (modelOverride) spec.model = modelOverride;
+
+  printDescribeSpec(spec);
+
+  let totalCost = parseCost;
+
+  if (dryRun) {
+    console.log(`[dry-run] Would create agent "${spec.name}". No files written.`);
+    console.log(`  Parse cost: $${totalCost.toFixed(4)}`);
+    return { spec, created: false, totalCost, dryRun: true };
+  }
+
+  if (!yes) {
+    const ok = await _promptConfirmFn("Create this agent?");
+    if (!ok) {
+      console.log("Aborted.");
+      return { spec, created: false, totalCost, aborted: true };
+    }
+  }
+
+  // Build createAgent opts from spec
+  await createAgent({
+    name: spec.name,
+    template: spec.template,
+    mission: spec.mission,
+    model: spec.model || "sonnet",
+    maxTurns: spec.maxTurns,
+    workdir: spec.workdir || undefined,
+    outputFile: spec.outputFile || null,
+    createdBy: "describe",
+  });
+
+  // Bootstrap loop
+  let bootstrap = null;
+  if (!noBootstrap) {
+    const remaining = Math.max(0, costBudget - totalCost);
+    if (remaining <= 0) {
+      console.log(`\n[bootstrap] Skipped: budget exhausted by parse step.`);
+    } else {
+      console.log(`\nBootstrapping harness (max ${maxIterations} iter, budget $${remaining.toFixed(2)})...`);
+      bootstrap = await bootstrapAgent(spec.name, {
+        maxIterations,
+        costBudget: remaining,
+      });
+      totalCost += bootstrap.cost;
+      console.log(
+        `  Bootstrap: ${bootstrap.iterations} iter, domain_encoding=${bootstrap.finalScore ?? "?"}, stopped=${bootstrap.stopped}, cost=$${bootstrap.cost.toFixed(4)}`,
+      );
+    }
+  }
+
+  // Schedule
+  let scheduled = null;
+  if (!noSchedule && spec.schedule) {
+    const cronExpr = spec.schedule.cron
+      ? spec.schedule.cron
+      : expandScheduleSugar(spec.schedule.at);
+    try {
+      await scheduleInstall(spec.name, cronExpr, { force: false });
+      scheduled = { cron: cronExpr };
+    } catch (err) {
+      console.error(`[schedule] Install failed: ${err.message}`);
+    }
+  } else if (!noSchedule && !spec.schedule) {
+    console.log(`\n[schedule] No schedule in spec — agent will only run on-demand.`);
+  }
+
+  // Final summary
+  console.log(`\n--- Summary ---`);
+  console.log(`Created agent "${spec.name}"`);
+  console.log(`  Mission:    ${spec.mission}`);
+  if (spec.workdir) console.log(`  Workdir:    ${spec.workdir}`);
+  if (scheduled) console.log(`  Schedule:   ${scheduled.cron}`);
+  if (bootstrap) {
+    console.log(`  Bootstrap:  ${bootstrap.iterations} iter, domain_encoding=${bootstrap.finalScore ?? "?"}, stopped=${bootstrap.stopped}`);
+  }
+  console.log(`  Cost:       $${totalCost.toFixed(4)} / $${costBudget.toFixed(2)} budget`);
+  console.log(`  Run now:    node orchestrator.mjs run ${spec.name}`);
+  console.log(`  View:       node orchestrator.mjs status ${spec.name}`);
+
+  return {
+    spec,
+    created: true,
+    totalCost,
+    bootstrap,
+    scheduled,
+  };
+}
+
+// List agents that were created by `describe` (config.createdBy === "describe").
+export async function describeList() {
+  if (!(await exists(_agentsDir))) {
+    console.log("No agents found.");
+    return;
+  }
+  const entries = await readdir(_agentsDir, { withFileTypes: true });
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const configPath = join(_agentsDir, entry.name, "config.json");
+    try {
+      const config = await readJson(configPath);
+      if (config.createdBy !== "describe") continue;
+      const sched = config.schedule || {};
+      const schedStr = sched.cron
+        ? sched.cron
+        : sched.intervalSeconds
+          ? `every ${sched.intervalSeconds}s`
+          : "-";
+      rows.push({
+        name: entry.name,
+        mission: config.mission || "",
+        workdir: config.workdir || "-",
+        schedule: schedStr,
+        created: config.created || "-",
+      });
+    } catch {
+      // skip unreadable
+    }
+  }
+
+  if (rows.length === 0) {
+    console.log('No describe-generated agents. Create one with: orchestrator describe "<description>"');
+    return;
+  }
+
+  const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const header = `${"NAME".padEnd(22)} ${"MISSION".padEnd(50)} ${"WORKDIR".padEnd(24)} ${"SCHEDULE".padEnd(16)} CREATED`;
+  console.log(header);
+  for (const r of rows) {
+    console.log(
+      `${r.name.padEnd(22)} ${truncate(r.mission, 50).padEnd(50)} ${truncate(r.workdir, 24).padEnd(24)} ${r.schedule.padEnd(16)} ${r.created}`,
+    );
+  }
 }
 
 // --- Run ---
@@ -799,13 +1192,24 @@ let _spawnClaudeFn = spawnClaude;
 export function _testSetSpawnClaude(fn) { _spawnClaudeFn = fn; }
 export function _testResetSpawnClaude() { _spawnClaudeFn = spawnClaude; }
 
+// Scheduling — injectable exec for OS-touching calls (launchctl, crontab, plutil)
+const _execPromise = promisify(exec);
+let _execFn = _execPromise;
+export function _testSetExec(fn) { _execFn = fn; }
+export function _testResetExec() { _execFn = _execPromise; }
+
 let _agentsDir = AGENTS_DIR;
 let _pipelinesDir = PIPELINES_DIR;
-export function _testSetDirs({ agents, pipelines } = {}) {
+export function _testSetDirs({ agents, pipelines, launchAgents } = {}) {
   if (agents) _agentsDir = agents;
   if (pipelines) _pipelinesDir = pipelines;
+  if (launchAgents) LAUNCH_AGENTS_DIR = launchAgents;
 }
-export function _testResetDirs() { _agentsDir = AGENTS_DIR; _pipelinesDir = PIPELINES_DIR; }
+export function _testResetDirs() {
+  _agentsDir = AGENTS_DIR;
+  _pipelinesDir = PIPELINES_DIR;
+  LAUNCH_AGENTS_DIR = DEFAULT_LAUNCH_AGENTS_DIR;
+}
 
 function parseClaudeOutput(stdout) {
   try {
@@ -2484,6 +2888,668 @@ async function showPipelineStatus(runId) {
   }
 }
 
+// --- Scheduling ---
+//
+// Install a per-agent cron trigger using the native scheduler:
+//   - macOS  → launchd plist under ~/Library/LaunchAgents
+//   - Linux  → user crontab line marked with `# agent-orchestrator:<name>`
+//
+// Cron and the daemon loop's interval are mutually exclusive per agent —
+// `schedule --cron` refuses to install if intervalSeconds is set unless --force.
+
+const DEFAULT_LAUNCH_AGENTS_DIR = join(homedir(), "Library", "LaunchAgents");
+let LAUNCH_AGENTS_DIR = DEFAULT_LAUNCH_AGENTS_DIR;
+const CRON_MARKER_PREFIX = "# agent-orchestrator:";
+
+// XML-escape plist string content
+function xmlEscape(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+// Expand schedule sugar like "hourly", "daily HH:MM", "weekly [DOW] HH:MM", "weekdays HH:MM"
+// to a canonical 5-field cron expression.
+export function expandScheduleSugar(sugar) {
+  const accepted = `Accepted forms: "hourly", "daily HH:MM", "weekdays HH:MM", "weekly [mon|tue|wed|thu|fri|sat|sun] HH:MM"`;
+  if (typeof sugar !== "string") {
+    throw new Error(`Invalid schedule sugar: ${sugar}. ${accepted}`);
+  }
+  const s = sugar.trim().toLowerCase();
+  if (!s) throw new Error(`Empty schedule sugar. ${accepted}`);
+
+  if (s === "hourly") return "0 * * * *";
+
+  const parseTime = (t) => {
+    const m = /^([0-1]?\d|2[0-3]):([0-5]\d)$/.exec(t);
+    if (!m) throw new Error(`Invalid time "${t}" — expected HH:MM. ${accepted}`);
+    return { hh: parseInt(m[1], 10), mm: parseInt(m[2], 10) };
+  };
+
+  const daily = /^daily\s+(\S+)$/.exec(s);
+  if (daily) {
+    const { hh, mm } = parseTime(daily[1]);
+    return `${mm} ${hh} * * *`;
+  }
+
+  const weekdays = /^weekdays\s+(\S+)$/.exec(s);
+  if (weekdays) {
+    const { hh, mm } = parseTime(weekdays[1]);
+    return `${mm} ${hh} * * 1-5`;
+  }
+
+  const dowMap = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+  const weekly = /^weekly(?:\s+(sun|mon|tue|wed|thu|fri|sat))?\s+(\S+)$/.exec(s);
+  if (weekly) {
+    const dow = weekly[1] ? dowMap[weekly[1]] : 0; // default Sunday
+    const { hh, mm } = parseTime(weekly[2]);
+    return `${mm} ${hh} * * ${dow}`;
+  }
+
+  throw new Error(`Unknown schedule sugar "${sugar}". ${accepted}`);
+}
+
+// Validate a single cron field against its allowed range.
+// Accepts: "*", number, "A-B" range, comma-list of the above, "*/N" step.
+function validateCronField(field, min, max, label) {
+  const check = (tok) => {
+    // "*"
+    if (tok === "*") return;
+    // "*/N" step
+    let m = /^\*\/(\d+)$/.exec(tok);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n < 1 || n > max) {
+        throw new Error(`Invalid step in ${label}: ${tok}`);
+      }
+      return;
+    }
+    // "A-B" range
+    m = /^(\d+)-(\d+)$/.exec(tok);
+    if (m) {
+      const a = parseInt(m[1], 10);
+      const b = parseInt(m[2], 10);
+      if (a < min || b > max || a > b) {
+        throw new Error(`Invalid range in ${label}: ${tok} (must be ${min}-${max})`);
+      }
+      return;
+    }
+    // single number
+    m = /^(\d+)$/.exec(tok);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n < min || n > max) {
+        throw new Error(`Invalid value in ${label}: ${n} (must be ${min}-${max})`);
+      }
+      return;
+    }
+    throw new Error(`Invalid token in ${label}: "${tok}"`);
+  };
+
+  const parts = field.split(",");
+  if (parts.length === 0 || parts.some((p) => p === "")) {
+    throw new Error(`Invalid ${label}: "${field}"`);
+  }
+  parts.forEach(check);
+}
+
+const CRON_SUGAR_HINT =
+  `Tip: try one of these sugar forms via --at: "hourly", "daily HH:MM", "weekdays HH:MM", "weekly <mon-sun> HH:MM"`;
+
+// Validate a 5-field cron expression. Throws on invalid.
+export function validateCronExpr(expr) {
+  try {
+    if (typeof expr !== "string") throw new Error("Cron expression must be a string");
+    const fields = expr.trim().split(/\s+/);
+    if (fields.length !== 5) {
+      throw new Error(`Cron expression must have 5 fields (got ${fields.length}): "${expr}"`);
+    }
+    const [minute, hour, dom, month, dow] = fields;
+    validateCronField(minute, 0, 59, "minute");
+    validateCronField(hour, 0, 23, "hour");
+    validateCronField(dom, 1, 31, "day-of-month");
+    validateCronField(month, 1, 12, "month");
+    // cron day-of-week: 0-7 where both 0 and 7 mean Sunday
+    validateCronField(dow, 0, 7, "day-of-week");
+    return { minute, hour, dom, month, dow };
+  } catch (err) {
+    throw new Error(`${err.message}\n${CRON_SUGAR_HINT}`);
+  }
+}
+
+// Expand a single cron field to an explicit array of values, or null if wildcard.
+// Supports "*", number, "A-B", comma-list, and "*/N" over the full field range.
+function expandCronField(field, min, max) {
+  if (field === "*") return null;
+
+  // "*/N" over the full range → [min, min+N, min+2N, ...]
+  const step = /^\*\/(\d+)$/.exec(field);
+  if (step) {
+    const n = parseInt(step[1], 10);
+    const out = [];
+    for (let v = min; v <= max; v += n) out.push(v);
+    return out;
+  }
+
+  const values = new Set();
+  for (const tok of field.split(",")) {
+    const range = /^(\d+)-(\d+)$/.exec(tok);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      for (let v = a; v <= b; v++) values.add(v);
+      continue;
+    }
+    const one = /^(\d+)$/.exec(tok);
+    if (one) {
+      values.add(parseInt(one[1], 10));
+      continue;
+    }
+    // Unsupported shape (e.g. range-with-step "0-30/5") — fail with clear message
+    throw new Error(
+      `Cannot translate cron field "${field}" to launchd — simplify to number, range (A-B), list (A,B,C), or step (*/N).`,
+    );
+  }
+  return [...values].sort((a, b) => a - b);
+}
+
+// Convert a cron expression to a launchd StartCalendarInterval payload.
+// Returns a plain object or an array of objects (when multiple minute+hour combos needed).
+// Throws if the expression can't be represented.
+export function cronToLaunchdInterval(expr) {
+  const { minute, hour, dom, month, dow } = validateCronExpr(expr);
+
+  // launchd ANDs DayOfMonth + Weekday, while cron ORs them when both are non-"*".
+  // Refuse the ambiguous case rather than silently mis-schedule.
+  if (dom !== "*" && dow !== "*") {
+    throw new Error(
+      `Cannot translate cron "${expr}" to launchd: both day-of-month and day-of-week are set ` +
+      `(cron ORs them, launchd ANDs them). Simplify one field to "*" or install this schedule on Linux via crontab.`,
+    );
+  }
+
+  const minutes = expandCronField(minute, 0, 59);
+  const hours = expandCronField(hour, 0, 23);
+  const doms = expandCronField(dom, 1, 31);
+  const months = expandCronField(month, 1, 12);
+  // Normalize cron 7 (Sunday) → 0 for launchd (Weekday 0-6)
+  let dows = expandCronField(dow, 0, 7);
+  if (dows) {
+    dows = [...new Set(dows.map((d) => (d === 7 ? 0 : d)))].sort((a, b) => a - b);
+  }
+
+  // Build a cartesian product of non-wildcard fields into launchd dicts.
+  const minuteList = minutes ?? [null];
+  const hourList = hours ?? [null];
+  const domList = doms ?? [null];
+  const monthList = months ?? [null];
+  const dowList = dows ?? [null];
+
+  const dicts = [];
+  for (const mi of minuteList) {
+    for (const hr of hourList) {
+      for (const d of domList) {
+        for (const mo of monthList) {
+          for (const w of dowList) {
+            const entry = {};
+            if (mi != null) entry.Minute = mi;
+            if (hr != null) entry.Hour = hr;
+            if (d != null) entry.Day = d;
+            if (mo != null) entry.Month = mo;
+            if (w != null) entry.Weekday = w;
+            dicts.push(entry);
+          }
+        }
+      }
+    }
+  }
+
+  if (dicts.length === 0 || (dicts.length === 1 && Object.keys(dicts[0]).length === 0)) {
+    // Entirely-wildcard expression "* * * * *" — launchd can't express "every minute".
+    throw new Error(
+      `Cron "${expr}" matches every minute; launchd cannot express that via StartCalendarInterval.`,
+    );
+  }
+  return dicts.length === 1 ? dicts[0] : dicts;
+}
+
+// Render a launchd dict (key/value object) as plist XML.
+function renderLaunchdDict(dict, indent) {
+  const lines = [`${indent}<dict>`];
+  for (const [k, v] of Object.entries(dict)) {
+    lines.push(`${indent}  <key>${xmlEscape(k)}</key>`);
+    lines.push(`${indent}  <integer>${v}</integer>`);
+  }
+  lines.push(`${indent}</dict>`);
+  return lines.join("\n");
+}
+
+// Build a complete launchd plist for the given agent + cron expression.
+// Pure function: inputs go in, XML string comes out.
+export function cronToLaunchdPlist({ label, cronExpr, nodePath, orchestratorPath, workingDir, agentName, stdoutPath, stderrPath }) {
+  const interval = cronToLaunchdInterval(cronExpr);
+
+  let intervalBlock;
+  if (Array.isArray(interval)) {
+    const items = interval.map((d) => renderLaunchdDict(d, "    ")).join("\n");
+    intervalBlock = `  <key>StartCalendarInterval</key>\n  <array>\n${items}\n  </array>`;
+  } else {
+    intervalBlock = `  <key>StartCalendarInterval</key>\n${renderLaunchdDict(interval, "  ")}`;
+  }
+
+  const programArgs = [nodePath, orchestratorPath, "run", agentName]
+    .map((a) => `    <string>${xmlEscape(a)}</string>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${xmlEscape(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${programArgs}
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(workingDir)}</string>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(stdoutPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(stderrPath)}</string>
+  <key>RunAtLoad</key>
+  <false/>
+${intervalBlock}
+</dict>
+</plist>
+`;
+}
+
+// Build the canonical crontab line for an agent.
+export function buildCrontabLine({ cronExpr, projectRoot, nodePath, orchestratorPath, agentName }) {
+  validateCronExpr(cronExpr);
+  const marker = `${CRON_MARKER_PREFIX}${agentName}`;
+  // Redirect stdout/stderr to the agent's runs dir so cron doesn't email the user.
+  const logDir = join(projectRoot, "agents", agentName, "runs");
+  const cmd = `cd ${projectRoot} && ${nodePath} ${orchestratorPath} run ${agentName} >> ${logDir}/cron.log 2>&1`;
+  return `${cronExpr} ${cmd} ${marker}`;
+}
+
+// Parse a crontab string and strip out any lines tagged for this agent.
+// Returns the filtered string (without trailing newline normalization).
+export function stripCrontabForAgent(crontabText, agentName) {
+  const marker = `${CRON_MARKER_PREFIX}${agentName}`;
+  const lines = (crontabText ?? "").split("\n");
+  return lines.filter((l) => !l.includes(marker)).join("\n");
+}
+
+// Read the current user's crontab. Returns "" if user has no crontab.
+async function readCrontab() {
+  try {
+    const { stdout } = await _execFn("crontab -l");
+    return stdout;
+  } catch (err) {
+    // `crontab -l` exits 1 with "no crontab for USER" when empty — treat as empty
+    const msg = `${err.stderr || ""}${err.message || ""}`;
+    if (/no crontab/i.test(msg)) return "";
+    throw err;
+  }
+}
+
+// Write the given text as the user's new crontab (atomic via tmpfile + `crontab <file>`).
+async function writeCrontab(text) {
+  const tmpFile = join(tmpdir(), `agent-orchestrator-crontab-${Date.now()}-${process.pid}`);
+  try {
+    // Ensure trailing newline — crontab tolerates but produces cleaner diffs
+    const normalized = text.endsWith("\n") ? text : text + "\n";
+    await writeFile(tmpFile, normalized);
+    await _execFn(`crontab ${tmpFile}`);
+  } finally {
+    try { await unlink(tmpFile); } catch {}
+  }
+}
+
+// Install a cron schedule via crontab. Returns the line that was installed.
+async function installCrontab(agentName, cronExpr) {
+  const current = await readCrontab();
+  const stripped = stripCrontabForAgent(current, agentName);
+  const line = buildCrontabLine({
+    cronExpr,
+    projectRoot: ROOT,
+    nodePath: process.execPath,
+    orchestratorPath: ORCHESTRATOR_PATH,
+    agentName,
+  });
+  // Normalize: ensure stripped section ends with exactly one newline before appending
+  const base = stripped.replace(/\n*$/, "");
+  const newCrontab = (base ? base + "\n" : "") + line + "\n";
+  await writeCrontab(newCrontab);
+
+  // Round-trip verify: read it back and confirm the marker line survived verbatim
+  const after = await readCrontab();
+  if (!after.includes(line)) {
+    throw new Error(
+      `Crontab round-trip verification failed — installed line is missing after write.`,
+    );
+  }
+  return line;
+}
+
+// Remove any crontab lines for this agent. Idempotent.
+async function removeCrontab(agentName) {
+  const current = await readCrontab();
+  const marker = `${CRON_MARKER_PREFIX}${agentName}`;
+  if (!current.includes(marker)) return false; // nothing to remove
+  const stripped = stripCrontabForAgent(current, agentName);
+  await writeCrontab(stripped.replace(/\n*$/, "\n"));
+  return true;
+}
+
+// macOS install: write plist, lint, then bootstrap/load.
+export async function installLaunchd(agentName, cronExpr) {
+  const label = `com.agent-orchestrator.${agentName}`;
+  const plistPath = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+  const agentDir = join(_agentsDir, agentName);
+  const runsDir = join(agentDir, "runs");
+  await mkdir(runsDir, { recursive: true });
+  await mkdir(LAUNCH_AGENTS_DIR, { recursive: true });
+
+  const plist = cronToLaunchdPlist({
+    label,
+    cronExpr,
+    nodePath: process.execPath,
+    orchestratorPath: ORCHESTRATOR_PATH,
+    workingDir: ROOT,
+    agentName,
+    stdoutPath: join(runsDir, "launchd-stdout.log"),
+    stderrPath: join(runsDir, "launchd-stderr.log"),
+  });
+
+  // Atomic write via tmp + rename
+  const tmp = plistPath + ".tmp";
+  await writeFile(tmp, plist);
+  await rename(tmp, plistPath);
+
+  // Lint before loading
+  try {
+    await _execFn(`plutil -lint ${JSON.stringify(plistPath)}`);
+  } catch (err) {
+    // Clean up the bad plist so we don't leave corrupt state behind
+    try { await unlink(plistPath); } catch {}
+    throw new Error(`plutil -lint failed for ${plistPath}: ${err.stderr || err.message}`);
+  }
+
+  // Unload any previous version of this label before loading — idempotent install
+  const uid = process.getuid ? process.getuid() : 0;
+  try {
+    await _execFn(`launchctl bootout gui/${uid}/${label}`);
+  } catch {
+    // not loaded; ignore
+  }
+  try {
+    await _execFn(`launchctl bootstrap gui/${uid} ${JSON.stringify(plistPath)}`);
+  } catch (bootstrapErr) {
+    // Fallback for older macOS
+    try {
+      await _execFn(`launchctl load ${JSON.stringify(plistPath)}`);
+    } catch (loadErr) {
+      // Clean up the orphan plist — launchd never accepted it, so don't leave
+      // a half-installed artifact on disk that could confuse later runs.
+      try { await unlink(plistPath); } catch {}
+      throw new Error(
+        `Failed to load launchd job: bootstrap error: ${bootstrapErr.stderr || bootstrapErr.message}; ` +
+        `load fallback error: ${loadErr.stderr || loadErr.message}`,
+      );
+    }
+  }
+  return { plistPath, label };
+}
+
+// macOS remove: unload the job then delete the plist. Idempotent.
+async function removeLaunchd(agentName) {
+  const label = `com.agent-orchestrator.${agentName}`;
+  const plistPath = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+  const uid = process.getuid ? process.getuid() : 0;
+
+  let existed = false;
+  try {
+    await access(plistPath);
+    existed = true;
+  } catch {}
+
+  // Always try to bootout in case the plist was already deleted but job still loaded
+  try {
+    await _execFn(`launchctl bootout gui/${uid}/${label}`);
+  } catch {
+    // Fallback to unload if plist exists
+    if (existed) {
+      try { await _execFn(`launchctl unload ${JSON.stringify(plistPath)}`); } catch {}
+    }
+  }
+
+  if (existed) {
+    try { await unlink(plistPath); } catch {}
+  }
+  return existed;
+}
+
+// Check whether the launchd plist exists for an agent.
+async function launchdArtifactExists(agentName) {
+  const label = `com.agent-orchestrator.${agentName}`;
+  const plistPath = join(LAUNCH_AGENTS_DIR, `${label}.plist`);
+  try { await access(plistPath); return true; } catch { return false; }
+}
+
+// Check whether the crontab has a marker line for this agent.
+async function crontabArtifactExists(agentName) {
+  const current = await readCrontab();
+  return current.includes(`${CRON_MARKER_PREFIX}${agentName}`);
+}
+
+function detectSchedulerPlatform() {
+  if (process.platform === "darwin") return "darwin";
+  if (process.platform === "linux") return "linux";
+  throw new Error(`Scheduling only supported on macOS and Linux (got ${process.platform})`);
+}
+
+// Top-level schedule command handler.
+async function scheduleCommand(args) {
+  // Sub: `schedule list`
+  if (args[0] === "list") {
+    await scheduleList();
+    return;
+  }
+
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      cron: { type: "string" },
+      at: { type: "string" },
+      remove: { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
+    },
+    allowPositionals: true,
+  });
+  const name = positionals[0];
+  if (!name) {
+    throw new Error(
+      `Usage:\n` +
+      `  orchestrator schedule <name> --cron "<expr>"\n` +
+      `  orchestrator schedule <name> --at "<sugar>"\n` +
+      `  orchestrator schedule <name> --remove\n` +
+      `  orchestrator schedule <name>\n` +
+      `  orchestrator schedule list`,
+    );
+  }
+
+  const agentDir = join(_agentsDir, name);
+  if (!(await exists(agentDir))) throw new Error(`Agent "${name}" not found`);
+
+  // Show-current mode (no install flags)
+  if (!values.cron && !values.at && !values.remove) {
+    await scheduleShow(name);
+    return;
+  }
+
+  if (values.remove) {
+    await scheduleRemove(name);
+    return;
+  }
+
+  // Install path — figure out cron expression
+  let cronExpr;
+  if (values.cron && values.at) {
+    throw new Error(`--cron and --at are mutually exclusive`);
+  } else if (values.at) {
+    cronExpr = expandScheduleSugar(values.at);
+  } else {
+    cronExpr = values.cron.trim();
+  }
+  validateCronExpr(cronExpr);
+
+  await scheduleInstall(name, cronExpr, { force: values.force });
+}
+
+async function scheduleInstall(name, cronExpr, { force = false } = {}) {
+  const platform = detectSchedulerPlatform();
+  const agentDir = join(_agentsDir, name);
+  const configPath = join(agentDir, "config.json");
+  const config = await readJson(configPath);
+  const existing = config.schedule || {};
+
+  if (existing.intervalSeconds && !force) {
+    throw new Error(
+      `Agent "${name}" already has an interval schedule (${existing.intervalSeconds}s). ` +
+      `Remove it first or pass --force to replace it with cron.`,
+    );
+  }
+
+  // Platform-specific install (launchd validates plist with plutil before loading)
+  if (platform === "darwin") {
+    await installLaunchd(name, cronExpr);
+  } else {
+    await installCrontab(name, cronExpr);
+  }
+
+  const newSchedule = {
+    ...(existing.intervalSeconds && !force ? { intervalSeconds: existing.intervalSeconds } : {}),
+    cron: cronExpr,
+    installedAt: new Date().toISOString(),
+    platform,
+  };
+  config.schedule = newSchedule;
+  await writeJson(configPath, config);
+
+  console.log(`Scheduled "${name}" on ${platform}: ${cronExpr}`);
+  if (platform === "darwin") {
+    console.log(`  Plist: ${join(LAUNCH_AGENTS_DIR, `com.agent-orchestrator.${name}.plist`)}`);
+  } else {
+    console.log(`  Crontab marker: ${CRON_MARKER_PREFIX}${name}`);
+  }
+}
+
+async function scheduleRemove(name) {
+  const platform = detectSchedulerPlatform();
+  const agentDir = join(_agentsDir, name);
+  const configPath = join(agentDir, "config.json");
+  const config = await readJson(configPath);
+
+  let removed = false;
+  if (platform === "darwin") {
+    removed = await removeLaunchd(name);
+  } else {
+    removed = await removeCrontab(name);
+  }
+
+  // Drop cron-related keys but preserve intervalSeconds if present
+  if (config.schedule) {
+    const { cron, installedAt, platform: _p, intervalSeconds, ...rest } = config.schedule;
+    const remaining = { ...rest };
+    if (intervalSeconds != null) remaining.intervalSeconds = intervalSeconds;
+    config.schedule = Object.keys(remaining).length > 0 ? remaining : null;
+    await writeJson(configPath, config);
+  }
+
+  if (removed) {
+    console.log(`Removed schedule for "${name}" (${platform}).`);
+  } else {
+    console.log(`No OS-level schedule was installed for "${name}" (${platform}) — nothing to remove.`);
+  }
+}
+
+async function scheduleShow(name) {
+  const platform = (() => {
+    try { return detectSchedulerPlatform(); } catch { return process.platform; }
+  })();
+  const agentDir = join(_agentsDir, name);
+  const configPath = join(agentDir, "config.json");
+  const config = await readJson(configPath);
+  const sched = config.schedule || {};
+
+  console.log(`Schedule for "${name}":`);
+  if (sched.cron) {
+    console.log(`  Cron:         ${sched.cron}`);
+    console.log(`  Platform:     ${sched.platform || "(unknown)"}`);
+    console.log(`  Installed at: ${sched.installedAt || "(unknown)"}`);
+  } else {
+    console.log(`  Cron:         (none)`);
+  }
+  if (sched.intervalSeconds) {
+    console.log(`  Interval:     ${sched.intervalSeconds}s (daemon loop)`);
+  }
+
+  // OS artifact check (best-effort)
+  if (platform === "darwin") {
+    const plistPath = join(LAUNCH_AGENTS_DIR, `com.agent-orchestrator.${name}.plist`);
+    const exists = await launchdArtifactExists(name);
+    console.log(`  Plist:        ${plistPath}`);
+    console.log(`  Plist exists: ${exists ? "yes" : "no"}`);
+  } else if (platform === "linux") {
+    const exists = await crontabArtifactExists(name).catch(() => false);
+    console.log(`  Crontab line: ${exists ? "present" : "absent"} (marker: ${CRON_MARKER_PREFIX}${name})`);
+  }
+}
+
+async function scheduleList() {
+  if (!(await exists(_agentsDir))) {
+    console.log("No agents found.");
+    return;
+  }
+  const entries = await readdir(_agentsDir, { withFileTypes: true });
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const configPath = join(_agentsDir, entry.name, "config.json");
+    try {
+      const config = await readJson(configPath);
+      const sched = config.schedule;
+      if (!sched || !sched.cron) continue;
+      rows.push({
+        name: entry.name,
+        platform: sched.platform || "-",
+        cron: sched.cron,
+        installedAt: sched.installedAt || "-",
+      });
+    } catch {
+      // skip unreadable
+    }
+  }
+
+  if (rows.length === 0) {
+    console.log("No scheduled agents.");
+    return;
+  }
+
+  const header = `${"NAME".padEnd(20)} ${"PLATFORM".padEnd(9)} ${"CRON".padEnd(19)} INSTALLED AT`;
+  console.log(header);
+  for (const r of rows) {
+    console.log(`${r.name.padEnd(20)} ${r.platform.padEnd(9)} ${r.cron.padEnd(19)} ${r.installedAt}`);
+  }
+}
+
 // --- CLI ---
 
 const USAGE = `
@@ -2531,6 +3597,23 @@ Usage:
     --max-concurrent <n>        Max parallel agents (default: 3)
   orchestrator delete <name>    Remove an agent
 
+  orchestrator describe "<description>"  Natural-language → create + bootstrap + schedule an agent
+    --yes                       Skip interactive confirmation
+    --dry-run                   Print parsed spec, don't create anything
+    --no-bootstrap              Skip the audit+improve bootstrap loop
+    --no-schedule               Don't install OS-level schedule even if spec has one
+    --max-iterations <n>        Bootstrap iterations (default: 2)
+    --cost-budget <usd>         Total USD cap across all LLM calls (default: 1.0)
+    --model <m>                 Override model for the created agent
+  orchestrator describe list             List agents created via 'describe' (filter by createdBy)
+
+  orchestrator schedule <name> --cron "<expr>"   Install cron-based schedule (launchd on macOS, crontab on Linux)
+  orchestrator schedule <name> --at "<sugar>"    Sugar: "hourly", "daily 09:00", "weekdays 09:00", "weekly mon 09:00"
+  orchestrator schedule <name> --remove          Uninstall cron schedule (idempotent)
+  orchestrator schedule <name>                   Show current schedule + OS artifact status
+  orchestrator schedule list                     List all agents with a cron schedule
+    --force                     Allow replacing an existing intervalSeconds schedule
+
   orchestrator pipeline validate <name>  Validate pipeline config
   orchestrator pipeline run <name>       Run a pipeline
   orchestrator pipeline status <run-id>  Show pipeline run status
@@ -2545,7 +3628,9 @@ async function main() {
     console.log(USAGE);
     try {
       const templates = await readdir(TEMPLATES_DIR);
-      console.log(`Available templates: ${templates.join(", ")}`);
+      // Hide meta/ — it's for internal meta-prompts, not agent templates
+      const visible = templates.filter((t) => t !== "meta");
+      console.log(`Available templates: ${visible.join(", ")}`);
     } catch {}
     return;
   }
@@ -2777,6 +3862,56 @@ async function main() {
       console.log(`Deleting agent "${name}" (${config.mission})...`);
       await rm(agentDir, { recursive: true });
       console.log(`Agent "${name}" deleted.`);
+      break;
+    }
+
+    case "schedule": {
+      await scheduleCommand(process.argv.slice(3));
+      break;
+    }
+
+    case "describe": {
+      // Sub: `describe list` → list only describe-generated agents
+      if (process.argv[3] === "list") {
+        await describeList();
+        break;
+      }
+      const { values, positionals } = parseArgs({
+        args: process.argv.slice(3),
+        options: {
+          yes: { type: "boolean", default: false },
+          "dry-run": { type: "boolean", default: false },
+          "no-bootstrap": { type: "boolean", default: false },
+          "no-schedule": { type: "boolean", default: false },
+          "max-iterations": { type: "string", default: "2" },
+          "cost-budget": { type: "string", default: "1.0" },
+          model: { type: "string" },
+        },
+        allowPositionals: true,
+      });
+      const description = positionals.join(" ").trim();
+      if (!description) {
+        throw new Error(
+          `Usage: orchestrator describe "<description>" [--yes] [--dry-run] [--no-bootstrap] [--no-schedule] [--max-iterations N] [--cost-budget USD] [--model m]\n       orchestrator describe list`,
+        );
+      }
+      const maxIter = parseInt(values["max-iterations"]);
+      const costBdg = parseFloat(values["cost-budget"]);
+      if (!Number.isInteger(maxIter) || maxIter < 1) {
+        throw new Error(`--max-iterations must be a positive integer`);
+      }
+      if (!(costBdg > 0)) {
+        throw new Error(`--cost-budget must be a positive number`);
+      }
+      await describeAgent(description, {
+        yes: values.yes,
+        dryRun: values["dry-run"],
+        noBootstrap: values["no-bootstrap"],
+        noSchedule: values["no-schedule"],
+        maxIterations: maxIter,
+        costBudget: costBdg,
+        model: values.model || null,
+      });
       break;
     }
 

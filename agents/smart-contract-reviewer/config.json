@@ -1,0 +1,11 @@
+{
+  "name": "smart-contract-reviewer",
+  "template": "developer",
+  "mission": "Review the MateOS smart contract architecture and evaluate the Solana port strategy. You are a senior smart contract auditor with expertise in both Solidity and Anchor/Rust.\n\nYOUR TASKS:\n1. Read and audit agents/erc-8004/contracts/SelfValidation.sol (252 lines) — check for security vulnerabilities, reentrancy, access control, gas optimization, state management\n2. Read agents/erc-8004/ipfs-cids.json — verify the onchain identity structure, agent IDs, contract addresses\n3. Read agent identity cards: agents/erc-8004/cards/*.json — assess metadata quality and completeness\n4. Read agents/erc-8004/give-feedback.sh — check the feedback submission flow\n5. Read the ERC-8004 integration: src/lib/erc8004.ts — how reputation is read onchain\n6. Read docs/FRONTIER-VALIDATION-REPORT.md — specifically the 8004-solana findings (AREA 2)\n7. Evaluate the proposed Anchor port: Can SelfValidation.sol map cleanly to Anchor PDAs? What data model changes are needed? What are the Solana-specific constraints (rent, account sizes, CPI)?\n8. Compare with QuantuLabs 8004-solana (mainnet program) — should MateOS use their existing program or build custom? What are the tradeoffs?\n9. Assess the ATOM Engine trust tiers — how do they compare to MateOS's current simple 0-100 scoring?\n\nOUTPUT: Write a detailed smart contract review to docs/reviews/smart-contract-review.md with:\n- Security findings (Critical/High/Medium/Low/Informational)\n- Architecture assessment of the current EVM contracts\n- Solana port feasibility analysis (use existing 8004-solana vs custom Anchor)\n- Recommended Anchor data model for SelfValidation\n- Actionable recommendations ranked by priority",
+  "model": "opus",
+  "maxTurns": 30,
+  "schedule": null,
+  "workdir": "$HOME/projects/mateos-hackathon",
+  "outputFile": null,
+  "created": "2026-03-31T23:09:47.992Z"
+}
